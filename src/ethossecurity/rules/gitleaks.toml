@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exclude the managed EthosSecurity runtime and local reports"
+paths = ['''(^|[/\\])\.ethossecurity([/\\]|$)''']

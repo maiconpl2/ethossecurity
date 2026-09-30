@@ -45,6 +45,7 @@ class CoreTests(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
                 def execute(argv, **kwargs):
                     import subprocess
+                    self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
                     if failure == 'timeout':
                         raise subprocess.TimeoutExpired(argv, 1)
                     output = Path(argv[argv.index('--output')+1])

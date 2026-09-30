@@ -6,7 +6,7 @@ from .core import config, scan, PROFILES
 def create_server(root, config_path=None):
     root = Path(root).resolve(strict=True)
     # Configuration is supplied by the operator, never by a tool caller or target repository.
-    cfg = config(config_path)
+    cfg = config(config_path, root)
     lock = threading.Lock()
     server = FastMCP('EthosSecurity', host='127.0.0.1')
 

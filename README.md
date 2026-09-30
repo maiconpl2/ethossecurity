@@ -42,9 +42,9 @@ O EthosSecurity não aplica alterações ao código automaticamente. As decisõe
 
 O EthosSecurity organiza ferramentas de análise de código, dependências, credenciais e aplicações. Há integrações de execução e leitura de relatórios para **Semgrep, CodeQL, Trivy, Gitleaks, OSV-Scanner e OWASP ZAP**, ativadas conforme a configuração e a finalidade da revisão.
 
-Também há configurações de conexão preparadas para **OpenAI/ChatGPT/Codex, Claude/Anthropic e Google Antigravity**. Você pode usar o EthosSecurity diretamente pelo terminal e preparar a conexão com seu assistente para apoiar a interpretação dos resultados.
+Também há configurações de conexão preparadas para **OpenAI/ChatGPT/Codex, Claude/Anthropic e Google Antigravity**. A instalação assistida prepara a conexão local, e seu assistente ajuda a investigar e explicar os resultados.
 
-As ferramentas externas são instaladas separadamente e têm seus próprios termos. O EthosSecurity não inclui assinaturas de modelos de IA nem seleciona ou executa modelos automaticamente. As marcas citadas identificam ferramentas e ambientes de integração; não indicam parceria, aprovação ou certificação desses fornecedores.
+A instalação assistida prepara Semgrep, Trivy, Gitleaks e OSV-Scanner; CodeQL e ZAP exigem preparação adicional. As ferramentas externas têm seus próprios termos. O EthosSecurity não inclui assinaturas de modelos de IA nem seleciona ou executa modelos automaticamente. As marcas citadas identificam ferramentas e ambientes de integração; não indicam parceria, aprovação ou certificação desses fornecedores.
 
 ## Do projeto ao próximo passo
 
@@ -54,19 +54,21 @@ O resultado é um relatório que pode ser lido por ferramentas e assistentes, co
 
 <a id="comecar"></a>
 
-## Comece pela revisão do seu projeto
+## Comece dentro do assistente que você já utiliza
 
-Você não precisa começar por uma auditoria completa. Escolha a frente que corresponde à sua necessidade e siga a preparação indicada no guia.
+Abra seu projeto no **Codex, Claude Code ou Google Antigravity** e envie:
 
-[**Abrir o guia e preparar minha primeira análise →**](docs/USAGE.pt-BR.md)
+> Instale o EthosSecurity deste link no meu projeto: https://github.com/maiconpl2/ethossecurity. Leia INSTALL.md, prepare a integração compatível com este assistente e faça a primeira análise. Explique os resultados em português, incluindo o que não foi verificado. Preserve meu código e minhas configurações existentes.
 
-Se você não trabalha com comandos, peça apoio técnico para a instalação inicial, a configuração das ferramentas e a interpretação dos resultados.
+Seu assistente cuida da preparação; você acompanha e aceita as permissões necessárias. Ele precisa ter acesso ao projeto, executar ferramentas e baixar dependências. A conexão pode exigir reabrir o projeto ou aceitar a integração no assistente.
+
+[**Ver como começar →**](docs/START.pt-BR.md) · [Ambientes e testes realizados](docs/COMPATIBILITY.md)
 
 ## Disponibilidade atual
 
-**Versão inicial 0.1.0.** O pacote local, a comunicação MCP e execuções reais do Gitleaks e do Semgrep foram verificados; dez testes automatizados passaram. A instalação diretamente pelo GitHub e o pipeline de testes, empacotamento e análise passaram nas verificações. As regras iniciais têm cobertura limitada. Execução real do CodeQL, Trivy, OSV-Scanner e ZAP, além das conexões nos produtos citados, ainda precisa de homologação.
+**Versão 0.2.0 — instalação assistida em validação.** A nova entrada prepara ferramentas em uma pasta isolada, registra MCP e quatro skills no projeto e gera relatórios locais em JSON e HTML. Os formatos de configuração de Codex, Claude Code e Antigravity foram testados para preservar outras integrações e permitir repetição. Veja os testes reais e as limitações em [compatibilidade](docs/COMPATIBILITY.md).
 
-O produto não oferece atualmente painel gráfico, correção automática ou serviço público hospedado. O uso em ChatGPT remoto exige configuração de acesso adicional. O código é público. O uso não comercial segue a licença incluída; empresas podem avaliar por 30 dias, nas condições abaixo. Uso comercial fora da avaliação exige licença separada. Preços e planos comerciais ainda serão definidos.
+As regras iniciais de código têm cobertura limitada. Configuração gerada não significa conexão homologada em todos os produtos. Chat sem acesso ao projeto e execução de ferramentas não instala o EthosSecurity por receber um link. Não há serviço público hospedado, correção automática ou garantia de segurança.
 
 ## Experimente no seu projeto
 

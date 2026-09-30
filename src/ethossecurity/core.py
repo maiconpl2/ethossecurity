@@ -1,5 +1,6 @@
 """Fixed argv scanner registry; no shell or arbitrary commands from MCP clients."""
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -15,8 +16,15 @@ PROFILES = {'bug-hunter': ['semgrep', 'codeql'], 'app-security': ['semgrep', 'co
 DEFAULT = {'version': 1, 'scanners': ['semgrep', 'trivy', 'gitleaks', 'osv'],
            'timeout_seconds': 300, 'fail_on': 'high', 'authorized_targets': []}
 
-def config(path=None):
-    result = DEFAULT | (yaml.safe_load(Path(path).read_text()) or {} if path else {})
+def config(path=None, root=None):
+    result = DEFAULT | (yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {} if path else {})
+    if root is not None:
+        runtime = Path(root) / '.ethossecurity/runtime.json'
+        if runtime.exists():
+            result['tool_paths'] = json.loads(runtime.read_text(encoding='utf-8'))['tool_paths'] | result.get('tool_paths', {})
+    paths = result.get('tool_paths', {})
+    if not isinstance(paths, dict) or any(k not in PROFILES['full-scan'] or not isinstance(v, str) or not Path(v).is_absolute() for k, v in paths.items()):
+        raise ValueError('tool_paths must map scanner names to absolute executable paths')
     if result['version'] != 1 or result['fail_on'] not in SEVERITIES:
         raise ValueError('Unsupported config version or severity')
     if not isinstance(result['scanners'], list) or any(s not in PROFILES['full-scan'] for s in result['scanners']):
@@ -30,13 +38,15 @@ def config(path=None):
 def command(scanner, root, cfg, output):
     rules = str(Path(__file__).parent / 'rules/default.yaml')
     if scanner == 'semgrep':
-        return ['semgrep', 'scan', '--config', rules, '--json', '--output', str(output), str(root)], {0}
+        return ['semgrep', 'scan', '--config', rules, '--metrics=off', '--exclude', '.ethossecurity', '--json', '--output', str(output), str(root)], {0}
     if scanner == 'trivy':
-        return ['trivy', 'fs', '--scanners', 'vuln,misconfig', '--format', 'json', '--output', str(output), str(root)], {0}
+        return ['trivy', '--cache-dir', str(root / '.ethossecurity/cache/trivy'), 'fs', '--scanners', 'vuln,misconfig', '--skip-dirs', str(root / '.ethossecurity'), '--format', 'json', '--output', str(output), str(root)], {0}
     if scanner == 'gitleaks':
-        return ['gitleaks', 'dir', str(root), '--redact=100', '--report-format', 'json', '--report-path', str(output)], {0, 1}
+        return ['gitleaks', 'dir', str(root), '--config', str(Path(__file__).parent / 'rules/gitleaks.toml'), '--redact=100', '--report-format', 'json', '--report-path', str(output)], {0, 1}
     if scanner == 'osv':
-        return ['osv-scanner', 'scan', 'source', '-r', str(root), '--format', 'json', '--output-file', str(output)], {0, 1}
+        return ['osv-scanner', 'scan', 'source', '-r', str(root), '--experimental-exclude', '.ethossecurity',
+                '--no-resolve', '--no-call-analysis', 'go', '--no-call-analysis', 'rust', '--allow-no-lockfiles',
+                '--format', 'json', '--output-file', str(output)], {0, 1}
     if scanner == 'codeql':
         db, queries = cfg.get('codeql_database'), cfg.get('codeql_queries')
         if not db or not queries:
@@ -56,7 +66,7 @@ def scan(root, profile='full-scan', cfg=None):
     root = Path(root).resolve(strict=True)
     if not root.is_dir() or profile not in PROFILES:
         raise ValueError('Expected directory and known profile')
-    cfg = cfg or config()
+    cfg = cfg or config(root=root)
     findings, executions = [], []
     with tempfile.TemporaryDirectory(prefix='ethos-') as temp:
         for scanner in PROFILES[profile]:
@@ -69,13 +79,16 @@ def scan(root, profile='full-scan', cfg=None):
                 argv, accepted = command(scanner, root, cfg, output)
                 if argv is None:
                     record.update(status='skipped', reason='Required scanner inputs not configured'); continue
-                exe = shutil.which(argv[0])
+                exe = shutil.which(cfg.get('tool_paths', {}).get(scanner, argv[0]))
                 if not exe:
                     record.update(status='unavailable', reason='Executable not installed'); continue
                 argv[0] = exe
                 # Discard diagnostic text: scanners can log source secrets even when reports are redacted.
-                run = subprocess.run(argv, cwd=root, shell=False, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, timeout=cfg['timeout_seconds'])
+                environment = dict(os.environ)
+                environment.pop('PYTHONPATH', None)
+                environment.pop('PYTHONHOME', None)
+                run = subprocess.run(argv, cwd=root, shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, timeout=cfg['timeout_seconds'], env=environment)
                 record['exit_code'] = run.returncode
                 if run.returncode not in accepted:
                     raise ValueError('Scanner failed; exit code ' + str(run.returncode))

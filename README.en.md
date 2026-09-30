@@ -44,7 +44,7 @@ EthosSecurity organizes tools for code, dependency, credential and application a
 
 Connection configurations are also prepared for **OpenAI/ChatGPT/Codex, Claude/Anthropic and Google Antigravity**. Use EthosSecurity directly from the terminal and prepare a connection to your assistant to help interpret results.
 
-External tools are installed separately and have their own terms. EthosSecurity does not include AI model subscriptions or automatically select or execute models. The listed brands identify tools and integration environments; they do not indicate partnership, endorsement or certification by those providers.
+Assisted installation prepares Semgrep, Trivy, Gitleaks and OSV-Scanner; CodeQL and ZAP need additional preparation. External tools have their own terms. EthosSecurity does not include AI model subscriptions or automatically select or execute models. The listed brands identify tools and integration environments; they do not indicate partnership, endorsement or certification by those providers.
 
 ## From your project to your next step
 
@@ -54,19 +54,21 @@ The result is a report for tools and assistants, with alerts and check status. I
 
 <a id="get-started"></a>
 
-## Start by reviewing your project
+## Start inside the assistant you already use
 
-You do not have to begin with a full audit. Choose the review area that fits your needs and follow the preparation steps in the guide.
+Open your project in **Codex, Claude Code or Google Antigravity** and send:
 
-[**Open the guide and prepare my first assessment →**](docs/USAGE.en.md)
+> Install EthosSecurity from this link in my project: https://github.com/maiconpl2/ethossecurity. Read INSTALL.md, prepare the integration compatible with this assistant, and run the first scan. Explain the results in English, including what was not checked. Preserve my code and existing configuration.
 
-If you do not work with terminal commands, ask for technical help with initial installation, scanner configuration and result interpretation.
+Your assistant handles preparation; follow along and accept the required permissions. It needs project access, tool execution and permitted dependency downloads. Loading the connection may require reopening the project or accepting the integration in your assistant.
 
-## Current availability
+[**See how to start →**](docs/START.en.md) · [Compatibility and completed tests](docs/COMPATIBILITY.md)
 
-**Initial version 0.1.0.** The local package, MCP communication and real Gitleaks and Semgrep runs were verified; ten automated tests passed. Direct GitHub installation and the test, build and scan pipeline passed verification. Starter rules provide limited coverage. Real execution of CodeQL, Trivy, OSV-Scanner and ZAP, plus live connections in the listed products, still requires acceptance testing.
+## Availability
 
-The product currently provides no graphical dashboard, automatic remediation or hosted public service. Remote ChatGPT usage requires additional access setup. The source is public. Noncommercial use follows the included license; businesses may evaluate it for 30 days under the conditions below. Commercial use outside evaluation requires a separate license. Commercial pricing and plans remain to be defined.
+**Version 0.2.0 — assisted installation under validation.** The new entrypoint prepares isolated tools, registers project MCP and four skills, and produces local JSON/HTML reports. Configuration formats for Codex, Claude Code and Antigravity were tested for preservation of other integrations and repeated setup. See actual tests and limitations in [compatibility](docs/COMPATIBILITY.md).
+
+Starter code rules have limited coverage. Generated configuration does not mean all product connections have been qualified. A conversation without project access and tool execution cannot install EthosSecurity merely by receiving a link. There is no public hosted service, automatic remediation or security guarantee.
 
 ## Try it on your project
 

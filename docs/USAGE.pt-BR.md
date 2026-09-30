@@ -4,7 +4,21 @@
 
 [Voltar à apresentação](../README.md)
 
-## Instalação
+## Instalação assistida
+
+Para usuários que desenvolvem com IA, comece por [este guia curto](START.pt-BR.md). O assistente deve seguir [INSTALL.md](../INSTALL.md) e executar a preparação. Ele identifica o cliente, prepara ferramentas isoladas, registra a conexão local e inicia a primeira análise.
+
+Para operadores técnicos com o pacote já instalado:
+
+```sh
+ethos-sec start /caminho/absoluto/do/projeto --client codex --language pt-BR
+```
+
+Escolha `claude` ou `antigravity` para os outros clientes. `setup` prepara sem analisar. `start` faz as duas etapas. Os relatórios ficam em `.ethossecurity/reports/latest.json` e `latest.html`; as ferramentas ficam em `.ethossecurity/tools/`. A preparação preserva integrações de terceiros e faz backup antes de acrescentar uma conexão. Conflitos com arquivos EthosSecurity existentes são informados sem sobrescrever.
+
+CodeQL e ZAP não rodam na primeira análise assistida. O fluxo verifica arquivos locais, sem executar builds ou resolver dependências através de scripts do projeto. O assistente deve ler os relatórios, carregar as skills e realizar a revisão contextual; a CLI não executa modelos de IA.
+
+## Instalação manual (opcional)
 
 Requisitos: Python 3.11 ou superior, scanners escolhidos instalados separadamente e Git para instalação direta do repositório. Repositórios privados exigem acesso autorizado.
 
@@ -28,12 +42,12 @@ python -m pip install .
 ethos-sec --help
 ```
 
-Ou instale o arquivo `.whl` fornecido com `python -m pip install /caminho/ethossecurity-0.1.0-py3-none-any.whl`.
+Ou instale o arquivo `.whl` fornecido com `python -m pip install /caminho/ethossecurity-0.2.0-py3-none-any.whl`.
 
 Para instalar a versão publicada pelo GitHub:
 
 ```sh
-python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.1.0"
+python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.2.0"
 ```
 
 Prefira uma versão ou commit revisado. Não inclua tokens na URL. Instalar o EthosSecurity não instala os scanners.

@@ -4,7 +4,21 @@
 
 [Back to the product overview](../README.en.md)
 
-## Installation
+## Assisted installation
+
+For people building with AI, start with [this short guide](START.en.md). The assistant follows [INSTALL.md](../INSTALL.md), identifies the client, prepares isolated tools, registers the local connection and runs the first scan.
+
+Technical operators with the package installed can use:
+
+```sh
+ethos-sec start /absolute/project/path --client codex --language en
+```
+
+Choose `claude` or `antigravity` for other clients. `setup` prepares without scanning; `start` does both. Reports go to `.ethossecurity/reports/latest.json` and `latest.html`; tools go to `.ethossecurity/tools/`. Preparation preserves other integrations and backs up existing configuration before adding a connection. Conflicting EthosSecurity files are preserved and reported.
+
+CodeQL and ZAP do not run during assisted onboarding. It checks local files without running project builds or script-based dependency resolution. The assistant reads the reports and skills for contextual review; the CLI does not execute AI models.
+
+## Installation manually (optional)
 
 Requirements: Python 3.11 or later, separately installed selected scanners, and Git for direct repository installation. Private repositories require authorized access.
 
@@ -28,12 +42,12 @@ python -m pip install .
 ethos-sec --help
 ```
 
-Alternatively install the supplied `.whl` with `python -m pip install /path/to/ethossecurity-0.1.0-py3-none-any.whl`.
+Alternatively install the supplied `.whl` with `python -m pip install /path/to/ethossecurity-0.2.0-py3-none-any.whl`.
 
 To install the published release from GitHub:
 
 ```sh
-python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.1.0"
+python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.2.0"
 ```
 
 Prefer a reviewed version or commit. Do not put tokens in the URL. Installing EthosSecurity does not install the scanners.

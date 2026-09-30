@@ -1,0 +1,85 @@
+{
+  "semgrep": {
+    "version": "1.178.0"
+  },
+  "binaries": {
+    "gitleaks": {
+      "version": "v8.30.1",
+      "checksum_source": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt",
+      "platforms": {
+        "windows-x86_64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip",
+          "sha256": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+          "executable": "gitleaks.exe"
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+          "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+          "executable": "gitleaks"
+        },
+        "darwin-x86_64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_x64.tar.gz",
+          "sha256": "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709",
+          "executable": "gitleaks"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz",
+          "sha256": "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5",
+          "executable": "gitleaks"
+        }
+      }
+    },
+    "trivy": {
+      "version": "v0.74.0",
+      "checksum_source": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_checksums.txt",
+      "platforms": {
+        "windows-x86_64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_windows-64bit.zip",
+          "sha256": "94c40e0696e4b907a74b7b2e1438d5d72ebaca83115817407f568a002d520842",
+          "executable": "trivy.exe"
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+          "sha256": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+          "executable": "trivy"
+        },
+        "darwin-x86_64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-64bit.tar.gz",
+          "sha256": "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485",
+          "executable": "trivy"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-ARM64.tar.gz",
+          "sha256": "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11",
+          "executable": "trivy"
+        }
+      }
+    },
+    "osv": {
+      "version": "v2.6.0",
+      "checksum_source": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_SHA256SUMS",
+      "platforms": {
+        "windows-x86_64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_windows_amd64.exe",
+          "sha256": "e0ed7644118b717b028c249ee9d3515024e55e8510747ca08906eb96765354d6",
+          "executable": "osv-scanner.exe"
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64",
+          "sha256": "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108",
+          "executable": "osv-scanner"
+        },
+        "darwin-x86_64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_darwin_amd64",
+          "sha256": "60c5296637e977b28eeda5c7f13573e447659a632922737f94d11fa7e30ad6ca",
+          "executable": "osv-scanner"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_darwin_arm64",
+          "sha256": "98c460dcd37de25819babd757d04542045b6243113e209edcd4d89fedb0256b4",
+          "executable": "osv-scanner"
+        }
+      }
+    }
+  }
+}

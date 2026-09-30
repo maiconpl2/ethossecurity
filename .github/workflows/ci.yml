@@ -1,5 +1,9 @@
 name: EthosSecurity CI
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -24,10 +28,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install . semgrep
+      - run: python -m pip install . semgrep==1.178.0
       - run: ethos-sec scan . --profile bug-hunter --config examples/ci.yaml --output reports/security.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-report
           path: reports/security.json
+  assisted-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install .
+      - run: python tests/smoke_assisted.py
