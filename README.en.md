@@ -13,6 +13,7 @@ AI helps turn an idea into software faster. Each new feature also introduces dec
 EthosSecurity helps organize that work: gather signals of problems, identify where to investigate and guide your review with greater clarity. A supporting tool for people building an app, a SaaS product, an internal system or software for clients.
 
 <a id="product"></a>
+
 ## Three areas of your software need attention
 
 You do not need to know every technical term to understand the questions that matter:
@@ -52,6 +53,7 @@ External tools are installed separately and have their own terms. EthosSecurity 
 The result is a report for tools and assistants, with alerts and check status. It helps guide investigation; each alert still needs confirmation in the project's context.
 
 <a id="get-started"></a>
+
 ## Start by reviewing your project
 
 You do not have to begin with a full audit. Choose the review area that fits your needs and follow the preparation steps in the guide.
@@ -62,7 +64,7 @@ If you do not work with terminal commands, ask for technical help with initial i
 
 ## Current availability
 
-**Initial version 0.1.0.** The local package, MCP communication and a real Gitleaks run were verified; ten automated tests passed. Starter rules provide limited coverage. Real execution of other scanners, live connections in the listed products and the GitHub pipeline still require acceptance testing.
+**Initial version 0.1.0.** The local package, MCP communication and real Gitleaks and Semgrep runs were verified; ten automated tests passed. Direct GitHub installation and the test, build and scan pipeline passed verification. Starter rules provide limited coverage. Real execution of CodeQL, Trivy, OSV-Scanner and ZAP, plus live connections in the listed products, still requires acceptance testing.
 
 The product currently provides no graphical dashboard, automatic remediation or hosted public service. Remote ChatGPT usage requires additional access setup. The source is public. Noncommercial use follows the included license; businesses may evaluate it for 30 days under the conditions below. Commercial use outside evaluation requires a separate license. Commercial pricing and plans remain to be defined.
 
@@ -75,6 +77,7 @@ The product currently provides no graphical dashboard, automatic remediation or 
 The period starts with the first business evaluation use; reinstalling or updating does not restart it. This version relies on usage terms, with no automatic activation or blocking. There is no automatic purchase, renewal or charge after evaluation.
 
 <a id="technical-guide"></a>
+
 ## Technical guide
 
 <details>

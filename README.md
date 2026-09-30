@@ -13,6 +13,7 @@ A IA permite transformar uma ideia em software com mais rapidez. Junto com cada 
 O EthosSecurity ajuda você a organizar essa etapa: reunir sinais de problemas, entender onde investigar e conduzir a revisão com mais clareza. Uma ferramenta de apoio para quem está criando um aplicativo, um SaaS, um sistema interno ou um produto para clientes.
 
 <a id="produto"></a>
+
 ## Seu software precisa de atenção em três frentes
 
 Não é preciso dominar todos os nomes técnicos para entender as perguntas que importam:
@@ -52,6 +53,7 @@ As ferramentas externas são instaladas separadamente e têm seus próprios term
 O resultado é um relatório que pode ser lido por ferramentas e assistentes, com alertas e o estado das verificações. Ele ajuda a conduzir a investigação; cada alerta ainda precisa ser confirmado no contexto do projeto.
 
 <a id="comecar"></a>
+
 ## Comece pela revisão do seu projeto
 
 Você não precisa começar por uma auditoria completa. Escolha a frente que corresponde à sua necessidade e siga a preparação indicada no guia.
@@ -62,7 +64,7 @@ Se você não trabalha com comandos, peça apoio técnico para a instalação in
 
 ## Disponibilidade atual
 
-**Versão inicial 0.1.0.** O pacote local, a comunicação MCP e uma execução real do Gitleaks foram verificados; dez testes automatizados passaram. As regras iniciais têm cobertura limitada. Execução real dos outros scanners, conexões nos produtos citados e pipeline no GitHub ainda precisam de homologação.
+**Versão inicial 0.1.0.** O pacote local, a comunicação MCP e execuções reais do Gitleaks e do Semgrep foram verificados; dez testes automatizados passaram. A instalação diretamente pelo GitHub e o pipeline de testes, empacotamento e análise passaram nas verificações. As regras iniciais têm cobertura limitada. Execução real do CodeQL, Trivy, OSV-Scanner e ZAP, além das conexões nos produtos citados, ainda precisa de homologação.
 
 O produto não oferece atualmente painel gráfico, correção automática ou serviço público hospedado. O uso em ChatGPT remoto exige configuração de acesso adicional. O código é público. O uso não comercial segue a licença incluída; empresas podem avaliar por 30 dias, nas condições abaixo. Uso comercial fora da avaliação exige licença separada. Preços e planos comerciais ainda serão definidos.
 
@@ -75,6 +77,7 @@ O produto não oferece atualmente painel gráfico, correção automática ou ser
 O prazo começa no primeiro uso empresarial de avaliação; reinstalação ou atualização não o reinicia. Nesta versão, o controle é pelas condições de uso, sem ativação ou bloqueio automático. Não há compra, renovação ou cobrança automática ao final do teste.
 
 <a id="guia-tecnico"></a>
+
 ## Guia técnico
 
 <details>

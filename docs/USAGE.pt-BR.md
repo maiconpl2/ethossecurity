@@ -110,6 +110,6 @@ ethos-sec import trivy reports/image.json --output reports/image-normalized.json
 
 ## Operação e automação
 
-O workflow GitHub Actions incluído testa, empacota e demonstra uma análise com Semgrep. Ele ainda não foi executado no GitHub e não publica pacotes automaticamente.
+O workflow GitHub Actions incluído testa, empacota e demonstra uma análise com Semgrep. Foi executado com sucesso no GitHub e não publica pacotes automaticamente. Veja os resultados em [Actions](https://github.com/maiconpl2/ethossecurity/actions).
 
 Analise somente projetos autorizados. Repositórios não confiáveis devem ser processados em ambiente isolado, sem credenciais de produção. Revise os relatórios antes de compartilhá-los: caminhos, endpoints e metadados também podem ser sensíveis.
