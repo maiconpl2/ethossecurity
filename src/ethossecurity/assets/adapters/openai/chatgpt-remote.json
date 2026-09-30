@@ -1,0 +1,4 @@
+{
+  "url": "https://YOUR-AUTHENTICATED-GATEWAY/mcp",
+  "note": "Deployment template, not a running endpoint. ChatGPT needs a reachable remote MCP server; stdio is for local clients."
+}

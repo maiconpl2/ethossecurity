@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ethossecurity": {
+      "command": "ethos-sec",
+      "args": [
+        "mcp",
+        "--root",
+        "/absolute/path/to/project",
+        "--config",
+        "/absolute/path/to/trusted/ethossecurity.yaml"
+      ]
+    }
+  }
+}

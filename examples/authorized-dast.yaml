@@ -1,0 +1,7 @@
+version: 1
+scanners: [zap]
+timeout_seconds: 300
+fail_on: high
+# Replace only with a test system you own or have permission to scan.
+zap_target: http://127.0.0.1:8080
+authorized_targets: [http://127.0.0.1:8080]

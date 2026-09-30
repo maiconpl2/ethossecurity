@@ -1,0 +1,26 @@
+name: Commercial license / Licença comercial
+description: Request commercial permission or an evaluation extension. Solicitar licença comercial ou extensão da avaliação.
+title: "[License] Commercial permission request"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a public request channel. Do not include credentials, client data or confidential information. Submission does not grant permission or create a purchase.
+
+        Este canal é público. Não inclua credenciais, dados de clientes ou informações confidenciais. O envio não concede autorização nem contrata uma licença.
+  - type: dropdown
+    id: request
+    attributes:
+      label: Request type / Tipo de solicitação
+      options:
+        - Commercial license / Licença comercial
+        - Evaluation extension / Prorrogação da avaliação
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Intended use / Uso pretendido
+      description: Briefly describe the intended scope, without confidential information. Descreva o uso de forma breve, sem informações confidenciais.
+    validations:
+      required: true

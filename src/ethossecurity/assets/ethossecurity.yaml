@@ -1,0 +1,10 @@
+version: 1
+scanners: [semgrep, trivy, gitleaks, osv]
+timeout_seconds: 300
+fail_on: high
+# ZAP is opt-in and requires an exact authorized URL in both fields.
+zap_target: null
+authorized_targets: []
+# CodeQL analyzes a prebuilt database; EthosSecurity does not run project builds.
+codeql_database: null
+codeql_queries: null

@@ -1,0 +1,12 @@
+include README.md README.en.md ethossecurity.yaml
+include LICENSE
+recursive-include skills *.md
+recursive-include adapters *.json *.toml
+recursive-include docs *.md
+recursive-include examples *.yaml
+recursive-include tests *.py
+include .github/workflows/ci.yml
+
+include EVALUATION.md EVALUATION.en.md
+recursive-include licenses *.md
+recursive-include .github/ISSUE_TEMPLATE *.yml

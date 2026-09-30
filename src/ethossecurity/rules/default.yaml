@@ -1,0 +1,21 @@
+rules:
+  - id: ethos.python.bare-except
+    languages: [python]
+    message: Bare exception handler catches termination signals; review intended exception types.
+    severity: WARNING
+    pattern: |
+      try:
+        ...
+      except:
+        ...
+    metadata:
+      cwe: [CWE-396]
+      category: bug
+  - id: ethos.python.shell-input
+    languages: [python]
+    message: Shell execution requires validation of every interpolated value; prefer argv with shell disabled.
+    severity: ERROR
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+    metadata:
+      cwe: [CWE-78]
+      category: security

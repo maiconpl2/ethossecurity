@@ -1,0 +1,4 @@
+version: 1
+scanners: [semgrep]
+timeout_seconds: 300
+fail_on: high

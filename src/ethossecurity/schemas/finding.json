@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EthosSecurity Finding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "impact": {
+      "type": "string"
+    },
+    "recommendation": {
+      "type": "string"
+    },
+    "scanner_source": {
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical",
+        "unknown"
+      ]
+    },
+    "confidence": {
+      "enum": [
+        "unknown",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "cwe": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "owasp": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "line": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "endpoint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exploitability": {
+      "enum": [
+        "unknown",
+        "unlikely",
+        "plausible",
+        "demonstrated"
+      ]
+    },
+    "suggested_patch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validation_status": {
+      "enum": [
+        "unvalidated",
+        "confirmed",
+        "false_positive",
+        "needs_context",
+        "fixed",
+        "accepted_risk"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "rule_id",
+    "evidence",
+    "impact",
+    "recommendation",
+    "scanner_source",
+    "severity",
+    "confidence",
+    "cwe",
+    "owasp",
+    "file",
+    "line",
+    "endpoint",
+    "exploitability",
+    "suggested_patch",
+    "validation_status"
+  ]
+}
