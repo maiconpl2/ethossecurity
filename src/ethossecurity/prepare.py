@@ -121,12 +121,16 @@ def semgrep_install(root, version):
     receipt = folder / 'receipt.json'
     if executable.exists() and receipt.exists():
         return str(executable)
-    venv.EnvBuilder(with_pip=True).create(folder)
+    venv.EnvBuilder(with_pip=False).create(folder)
     environment = dict(os.environ)
     environment.pop('PYTHONPATH', None)
     environment.pop('PYTHONHOME', None)
+    # Never inherit stdio: under MCP, a child sharing the server's pending stdin pipe hangs on Windows.
+    subprocess.run([str(python), '-m', 'ensurepip', '--upgrade', '--default-pip'], check=True, timeout=600, env=environment,
+                   stdin=subprocess.DEVNULL, stdout=sys.stderr)
     subprocess.run([str(python), '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', '--index-url',
-                    'https://pypi.org/simple', 'semgrep==' + version], check=True, timeout=1200, env=environment)
+                    'https://pypi.org/simple', 'semgrep==' + version], check=True, timeout=1200, env=environment,
+                   stdin=subprocess.DEVNULL, stdout=sys.stderr)  # stdout carries the MCP stdio protocol
     if not executable.is_file():
         raise ValueError('Semgrep entrypoint was not installed')
     write_json(receipt, {'version': version, 'source': 'https://pypi.org/project/semgrep/' + version + '/'})

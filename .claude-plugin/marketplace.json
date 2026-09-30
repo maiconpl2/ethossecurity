@@ -1,0 +1,126 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ethossecurity",
+  "owner": {
+    "name": "Maicon"
+  },
+  "metadata": {
+    "description": "Revisão de segurança de projetos: bugs, aplicação e infraestrutura. Instale o motor e escolha as skills que deseja."
+  },
+  "plugins": [
+    {
+      "name": "ethossecurity",
+      "displayName": "EthosSecurity: motor de análise",
+      "description": "Servidor MCP que analisa o projeto aberto no Claude Code com Semgrep, Trivy, Gitleaks e OSV-Scanner. Instalado automaticamente com qualquer skill.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Maicon"
+      },
+      "source": "./",
+      "repository": "https://github.com/maiconpl2/ethossecurity",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": [
+        "security",
+        "mcp",
+        "semgrep",
+        "trivy",
+        "gitleaks",
+        "osv"
+      ],
+      "category": "security",
+      "mcpServers": {
+        "ethossecurity": {
+          "command": "uv",
+          "args": [
+            "run",
+            "--quiet",
+            "--frozen",
+            "--project",
+            "${CLAUDE_PLUGIN_ROOT}",
+            "ethos-sec",
+            "mcp"
+          ],
+          "env": {
+            "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv",
+            "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+          }
+        }
+      }
+    },
+    {
+      "name": "bug-hunter",
+      "displayName": "EthosSecurity: caça a bugs",
+      "description": "Skill de revisão de bugs e falhas de lógica com evidências, usando o perfil bug-hunter.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Maicon"
+      },
+      "source": "./",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "category": "security",
+      "dependencies": [
+        "ethossecurity"
+      ],
+      "skills": [
+        "./src/ethossecurity/assets/skills/bug-hunter"
+      ]
+    },
+    {
+      "name": "app-security",
+      "displayName": "EthosSecurity: segurança da aplicação",
+      "description": "Skill de revisão de autenticação, autorização, isolamento entre clientes, injeções, XSS, CSRF, SSRF e exposição de dados.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Maicon"
+      },
+      "source": "./",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "category": "security",
+      "dependencies": [
+        "ethossecurity"
+      ],
+      "skills": [
+        "./src/ethossecurity/assets/skills/app-security"
+      ]
+    },
+    {
+      "name": "infra-security",
+      "displayName": "EthosSecurity: segurança da infraestrutura",
+      "description": "Skill de revisão de dependências vulneráveis, credenciais expostas e configurações de infraestrutura.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Maicon"
+      },
+      "source": "./",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "category": "security",
+      "dependencies": [
+        "ethossecurity"
+      ],
+      "skills": [
+        "./src/ethossecurity/assets/skills/infra-security"
+      ]
+    },
+    {
+      "name": "full-scan",
+      "displayName": "EthosSecurity: análise completa",
+      "description": "Coordena as três revisões e consolida os achados. Instala junto as skills de bugs, aplicação e infraestrutura.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Maicon"
+      },
+      "source": "./",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "category": "security",
+      "dependencies": [
+        "ethossecurity",
+        "bug-hunter",
+        "app-security",
+        "infra-security"
+      ],
+      "skills": [
+        "./src/ethossecurity/assets/skills/full-scan"
+      ]
+    }
+  ]
+}

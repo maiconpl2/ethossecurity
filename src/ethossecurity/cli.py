@@ -11,7 +11,7 @@ def main():
     s = sub.add_parser('scan'); s.add_argument('root'); s.add_argument('--profile', choices=PROFILES, default='full-scan')
     s.add_argument('--config'); s.add_argument('--output')
     i = sub.add_parser('import'); i.add_argument('scanner', choices=PROFILES['full-scan']); i.add_argument('report'); i.add_argument('--output')
-    m = sub.add_parser('mcp'); m.add_argument('--root', required=True); m.add_argument('--config'); m.add_argument('--http', action='store_true')
+    m = sub.add_parser('mcp'); m.add_argument('--root'); m.add_argument('--config'); m.add_argument('--http', action='store_true')
     init = sub.add_parser('init'); init.add_argument('root'); init.add_argument('--adapter', choices=['openai','anthropic','antigravity'], default='openai')
     for name in ('setup', 'start'):
         action = sub.add_parser(name)

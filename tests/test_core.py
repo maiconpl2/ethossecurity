@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,53 @@ class CoreTests(unittest.TestCase):
             self.assertEqual({t.name for t in tools}, {'security_scan','security_profiles'})
             scan_tool = next(t for t in tools if t.name == 'security_scan')
             self.assertEqual(set(scan_tool.inputSchema['properties']), {'profile'})
+
+    def test_plugin_mode_uses_session_project_and_distrusts_its_runtime(self):
+        import asyncio
+        from ethossecurity import core, server as srv
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
+            planted = Path(d) / '.ethossecurity/runtime.json'
+            planted.parent.mkdir()
+            planted.write_text(json.dumps({'tool_paths': {'semgrep': str(Path(d).resolve() / 'evil.exe')}}))
+            with patch.object(core, 'GLOBAL_HOME', Path(home)), patch.object(srv, 'GLOBAL_HOME', Path(home)), \
+                 patch.dict('os.environ', {'CLAUDE_PROJECT_DIR': d}):
+                self.assertEqual(srv.workspace_root(), d)
+                self.assertNotIn('tool_paths', config(root=d, trust_project=False))
+                self.assertIn('semgrep', config(root=d)['tool_paths'])
+                tools = asyncio.run(srv.create_server().list_tools())
+                self.assertEqual({t.name for t in tools}, {'security_scan', 'security_profiles', 'security_setup'})
+            with patch.dict('os.environ', {'CLAUDE_PROJECT_DIR': '${CLAUDE_PROJECT_DIR}'}):
+                self.assertEqual(srv.workspace_root(), str(Path.cwd()))
+
+    def test_claude_marketplace_is_consistent(self):
+        repo = Path(__file__).resolve().parents[1]
+        market = json.loads((repo / '.claude-plugin/marketplace.json').read_text(encoding='utf-8'))
+        names = {p['name'] for p in market['plugins']}
+        for plugin in market['plugins']:
+            self.assertTrue(set(plugin.get('dependencies', [])) <= names)
+            for skill in plugin.get('skills', []):
+                self.assertTrue((repo / skill / 'SKILL.md').is_file())
+        # Only the engine carries the MCP server; a default skills/ folder would leak every skill into it.
+        self.assertEqual(sum('mcpServers' in p for p in market['plugins']), 1)
+        self.assertFalse((repo / 'skills').exists())
+
+    def test_semgrep_preparation_never_inherits_stdin(self):
+        import subprocess
+        from ethossecurity import prepare
+        calls = []
+        def execute(argv, **kwargs):
+            calls.append(kwargs)
+            if 'pip' in argv:
+                exe = Path(argv[0]).parent / ('semgrep.exe' if Path(argv[0]).suffix else 'semgrep')
+                exe.write_text('')
+            return subprocess.CompletedProcess(argv, 0)
+        with tempfile.TemporaryDirectory() as d, patch.object(prepare.venv, 'EnvBuilder') as builder, \
+             patch.object(prepare.subprocess, 'run', side_effect=execute):
+            builder.return_value.create.side_effect = lambda folder: (Path(folder) / ('Scripts' if os.name == 'nt' else 'bin')).mkdir(parents=True)
+            prepare.semgrep_install(d, '0.0.0')
+        builder.assert_called_once_with(with_pip=False)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(c['stdin'] == subprocess.DEVNULL for c in calls))
 
 if __name__ == '__main__':
     unittest.main()

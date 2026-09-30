@@ -16,12 +16,22 @@ PROFILES = {'bug-hunter': ['semgrep', 'codeql'], 'app-security': ['semgrep', 'co
 DEFAULT = {'version': 1, 'scanners': ['semgrep', 'trivy', 'gitleaks', 'osv'],
            'timeout_seconds': 300, 'fail_on': 'high', 'authorized_targets': []}
 
-def config(path=None, root=None):
+# Shared per-user installation used by the Claude Code plugin: ~/.ethossecurity/{runtime.json,tools,cache,reports}.
+GLOBAL_ROOT = Path.home()
+GLOBAL_HOME = GLOBAL_ROOT / '.ethossecurity'
+
+def config(path=None, root=None, trust_project=True):
     result = DEFAULT | (yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {} if path else {})
-    if root is not None:
-        runtime = Path(root) / '.ethossecurity/runtime.json'
+    runtimes = [GLOBAL_HOME / 'runtime.json']
+    # A scanned repository may be untrusted: its runtime state is honored only when explicitly trusted.
+    if root is not None and trust_project:
+        runtimes.append(Path(root) / '.ethossecurity/runtime.json')
+    managed = {}
+    for runtime in runtimes:
         if runtime.exists():
-            result['tool_paths'] = json.loads(runtime.read_text(encoding='utf-8'))['tool_paths'] | result.get('tool_paths', {})
+            managed |= json.loads(runtime.read_text(encoding='utf-8'))['tool_paths']
+    if managed:
+        result['tool_paths'] = managed | result.get('tool_paths', {})
     paths = result.get('tool_paths', {})
     if not isinstance(paths, dict) or any(k not in PROFILES['full-scan'] or not isinstance(v, str) or not Path(v).is_absolute() for k, v in paths.items()):
         raise ValueError('tool_paths must map scanner names to absolute executable paths')
@@ -40,7 +50,8 @@ def command(scanner, root, cfg, output):
     if scanner == 'semgrep':
         return ['semgrep', 'scan', '--config', rules, '--metrics=off', '--exclude', '.ethossecurity', '--json', '--output', str(output), str(root)], {0}
     if scanner == 'trivy':
-        return ['trivy', '--cache-dir', str(root / '.ethossecurity/cache/trivy'), 'fs', '--scanners', 'vuln,misconfig', '--skip-dirs', str(root / '.ethossecurity'), '--format', 'json', '--output', str(output), str(root)], {0}
+        # Vulnerability data is not project-specific: one shared cache, never written into the scanned project.
+        return ['trivy', '--cache-dir', str(GLOBAL_HOME / 'cache/trivy'), 'fs', '--scanners', 'vuln,misconfig', '--skip-dirs', str(root / '.ethossecurity'), '--format', 'json', '--output', str(output), str(root)], {0}
     if scanner == 'gitleaks':
         return ['gitleaks', 'dir', str(root), '--config', str(Path(__file__).parent / 'rules/gitleaks.toml'), '--redact=100', '--report-format', 'json', '--report-path', str(output)], {0, 1}
     if scanner == 'osv':

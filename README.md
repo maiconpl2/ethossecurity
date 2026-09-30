@@ -64,6 +64,25 @@ Seu assistente cuida da preparação; você acompanha e aceita as permissões ne
 
 [**Ver como começar →**](docs/START.pt-BR.md) · [Ambientes e testes realizados](docs/COMPATIBILITY.md)
 
+### No Claude Code, instale como plugin
+
+Adicione o marketplace uma única vez e escolha as skills que deseja. O motor de análise é instalado automaticamente com qualquer uma delas.
+
+```text
+/plugin marketplace add maiconpl2/ethossecurity
+/plugin install full-scan@ethossecurity
+```
+
+| Plugin | O que adiciona |
+|---|---|
+| `ethossecurity` | Motor de análise (MCP), incluído automaticamente |
+| `bug-hunter` | Revisão de bugs e falhas de lógica |
+| `app-security` | Autenticação, autorização, isolamento entre clientes, injeções e exposição de dados |
+| `infra-security` | Dependências vulneráveis, credenciais expostas e configurações |
+| `full-scan` | Análise completa; inclui as três skills acima |
+
+Depois, em qualquer projeto aberto no Claude Code, peça: *"faça uma análise de segurança deste projeto"*. Não é preciso indicar a pasta: o plugin analisa o projeto da sessão. Na primeira análise, o Claude prepara os scanners em `~/.ethossecurity`, uma única vez por computador. Os relatórios ficam em `~/.ethossecurity/reports/` e o projeto analisado não é alterado. Requer o [uv](https://docs.astral.sh/uv/) instalado.
+
 ## Disponibilidade atual
 
 **Versão 0.2.0 — instalação assistida em validação.** A nova entrada prepara ferramentas em uma pasta isolada, registra MCP e quatro skills no projeto e gera relatórios locais em JSON e HTML. Os formatos de configuração de Codex, Claude Code e Antigravity foram testados para preservar outras integrações e permitir repetição. Veja os testes reais e as limitações em [compatibilidade](docs/COMPATIBILITY.md).

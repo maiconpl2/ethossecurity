@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ethossecurity"
-version = "0.2.0"
+version = "0.3.0"
 description = "Vendor-neutral security orchestration via MCP, skills and scanner adapters"
 license = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EthosSecurity-Evaluation"
 license-files = ["LICENSE", "EVALUATION.md", "EVALUATION.en.md", "licenses/*.md"]
