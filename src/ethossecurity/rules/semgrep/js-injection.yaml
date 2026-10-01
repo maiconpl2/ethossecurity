@@ -1,0 +1,1379 @@
+# EthosSecurity: JavaScript/TypeScript server-side injection rules.
+#
+# Two tiers per injection class:
+#   *-from-request            taint from HTTP request data (Express/Fastify/Koa/Hono/Next.js route
+#                             handlers and Server Actions/Cloudflare Workers/AWS Lambda) into a
+#                             dangerous sink; ERROR (open redirect: WARNING).
+#   *-from-function-argument  a function argument spliced into a command/SQL string; WARNING.
+# Request handlers do not trigger the second tier because req/request/res/ctx/c/event/env are not
+# treated as plain arguments, so one line is reported by a single rule.
+#
+# Shared building blocks (YAML anchors) referenced by several rules below.
+
+x-request-sources: &request-sources
+  - patterns:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+          - pattern: $REQ.headers
+          - pattern: $REQ.cookies
+          - pattern: $REQ.signedCookies
+          - pattern: $REQ.json()
+          - pattern: $REQ.text()
+          - pattern: $REQ.formData()
+          - pattern: $REQ.file.originalname
+          - pattern: $REQ.nextUrl.searchParams
+          - pattern: new URL($REQ.url).searchParams
+          - pattern: new URL($REQ.url, $BASE).searchParams
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $U = new URL($REQ.url);
+                      ...
+                  - pattern-inside: |
+                      $U = new URL($REQ.url, $BASE);
+                      ...
+              - pattern: $U.searchParams
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { searchParams } = new URL($REQ.url);
+                      ...
+                  - pattern-inside: |
+                      const { searchParams } = new URL($REQ.url, $BASE);
+                      ...
+                  - pattern-inside: |
+                      const { searchParams } = $REQ.nextUrl;
+                      ...
+              - pattern: searchParams
+      - metavariable-regex:
+          metavariable: $REQ
+          regex: ^(.+\.)?(req|request)$
+  # Express req.get()/req.param() and Hono c.req.query()/param()/header()/parseBody()
+  - patterns:
+      - pattern-either:
+          - pattern: $REQ.get(...)
+          - pattern: $REQ.query(...)
+          - pattern: $REQ.queries(...)
+          - pattern: $REQ.param(...)
+          - pattern: $REQ.header(...)
+          - pattern: $REQ.parseBody(...)
+      - metavariable-regex:
+          metavariable: $REQ
+          regex: ^(.+\.)?req$
+  # Koa
+  - pattern: ctx.query
+  - pattern: ctx.params
+  # AWS Lambda / Netlify Functions
+  - patterns:
+      - pattern-either:
+          - pattern: $EVT.queryStringParameters
+          - pattern: $EVT.multiValueQueryStringParameters
+          - pattern: $EVT.pathParameters
+          - pattern: $EVT.body
+      - metavariable-regex:
+          metavariable: $EVT
+          regex: ^(event|evt)$
+  # Next.js App Router dynamic segments: export async function GET(request, { params })
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              export async function $HANDLER($R, { params }) { ... }
+          - pattern-inside: |
+              export async function $HANDLER($R, { params }: $T) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, { params }) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, { params }: $T) { ... }
+      - pattern: params
+      - metavariable-regex:
+          metavariable: $HANDLER
+          regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              export async function $HANDLER($R, $CTX) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, $CTX) { ... }
+      - pattern: $CTX.params
+      - metavariable-regex:
+          metavariable: $HANDLER
+          regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+  # Next.js Server Actions are public endpoints: their form fields are request data.
+  - patterns:
+      - pattern-inside: |
+          "use server";
+          ...
+      - pattern-either:
+          - pattern: $FD.get(...)
+          - pattern: $FD.getAll(...)
+      - metavariable-regex:
+          metavariable: $FD
+          regex: ^(formData|fd)$
+
+# Request input without headers/cookies, for SSRF and open redirect: Host, Origin and Referer are
+# routinely used to build self-referencing URLs and would make those rules noisy.
+x-request-input-sources: &request-input-sources
+  - patterns:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+          - pattern: $REQ.json()
+          - pattern: $REQ.text()
+          - pattern: $REQ.formData()
+          - pattern: $REQ.nextUrl.searchParams
+          - pattern: new URL($REQ.url).searchParams
+          - pattern: new URL($REQ.url, $BASE).searchParams
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $U = new URL($REQ.url);
+                      ...
+                  - pattern-inside: |
+                      $U = new URL($REQ.url, $BASE);
+                      ...
+              - pattern: $U.searchParams
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { searchParams } = new URL($REQ.url);
+                      ...
+                  - pattern-inside: |
+                      const { searchParams } = new URL($REQ.url, $BASE);
+                      ...
+                  - pattern-inside: |
+                      const { searchParams } = $REQ.nextUrl;
+                      ...
+              - pattern: searchParams
+      - metavariable-regex:
+          metavariable: $REQ
+          regex: ^(.+\.)?(req|request)$
+  - patterns:
+      - pattern-either:
+          - pattern: $REQ.query(...)
+          - pattern: $REQ.queries(...)
+          - pattern: $REQ.param(...)
+          - pattern: $REQ.parseBody(...)
+      - metavariable-regex:
+          metavariable: $REQ
+          regex: ^(.+\.)?req$
+  - pattern: ctx.query
+  - pattern: ctx.params
+  - patterns:
+      - pattern-either:
+          - pattern: $EVT.queryStringParameters
+          - pattern: $EVT.pathParameters
+          - pattern: $EVT.body
+      - metavariable-regex:
+          metavariable: $EVT
+          regex: ^(event|evt)$
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              export async function $HANDLER($R, { params }) { ... }
+          - pattern-inside: |
+              export async function $HANDLER($R, { params }: $T) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, { params }) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, { params }: $T) { ... }
+      - pattern: params
+      - metavariable-regex:
+          metavariable: $HANDLER
+          regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              export async function $HANDLER($R, $CTX) { ... }
+          - pattern-inside: |
+              export function $HANDLER($R, $CTX) { ... }
+      - pattern: $CTX.params
+      - metavariable-regex:
+          metavariable: $HANDLER
+          regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+  - patterns:
+      - pattern-inside: |
+          "use server";
+          ...
+      - pattern-either:
+          - pattern: $FD.get(...)
+          - pattern: $FD.getAll(...)
+      - metavariable-regex:
+          metavariable: $FD
+          regex: ^(formData|fd)$
+
+# A base URL fixed in code: a module/function variable assigned from process.env or
+# import.meta.env (optionally with ! / as string and a literal fallback), a string literal or a
+# ternary of literals (const apiBaseUrl = process.env.API_URL ?? "http://localhost:4000").
+# `${apiBaseUrl}/users/${id}` keeps that host, so request data later in the path is neither SSRF
+# nor an open redirect.
+x-fixed-base-url-sanitizers: &fixed-base-url-sanitizers
+  - patterns:
+      - pattern-inside: |
+          $BASE = $BASEVALUE;
+          ...
+      - metavariable-regex: &fixed-base-url-value
+          metavariable: $BASEVALUE
+          regex: (?s)^(?:(?:process\.env|import\.meta\.env)\.\w+(?:!|\s+as\s+string)?(?:\s*(?:\|\||\?\?)\s*(?:"[^"]*"|'[^']*'|`[^`$]*`))?|"[^"]*"|'[^']*'|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|'[^']*')\s*:\s*(?:"[^"]*"|'[^']*'))$
+      - pattern: "`${$BASE}...`"
+      - pattern-regex: '`\$\{\s*[\w$.]+\s*\}[/?#][^`]*`'
+  - patterns:
+      - pattern-inside: |
+          $BASE = $BASEVALUE;
+          ...
+      - metavariable-regex: *fixed-base-url-value
+      - pattern: $LEFT + $RIGHT
+      - metavariable-pattern:
+          metavariable: $LEFT
+          pattern: $BASE + $SEP
+      - metavariable-regex:
+          metavariable: $LEFT
+          regex: ^[\w$.]+\s*\+\s*["'`][/?#]
+
+# ARG: a plain function parameter (taint starts at the declaration, so later guards and
+# reassignments are honoured). BUILT: a template literal or concatenation containing ARG.
+# Parameters typed number/boolean/bigint/Date or a union of literals, and parameters with a
+# numeric/boolean default value, cannot carry an injection payload and are not sources.
+x-function-argument-sources: &function-argument-sources
+  # untyped parameters without a default value
+  - label: ARG
+    patterns:
+      - pattern-either: &function-parameter-shapes
+          - pattern: function $FUNC(..., $PARAM, ...) { ... }
+          - pattern: (..., $PARAM, ...) => { ... }
+          - pattern: (..., $PARAM, ...) => $RET
+          - pattern: |
+              $METHOD(..., $PARAM, ...) { ... }
+      - pattern-not: "function $FUNC(..., $PARAM: $TYPE, ...) { ... }"
+      - pattern-not: "(..., $PARAM: $TYPE, ...) => { ... }"
+      - pattern-not: "(..., $PARAM: $TYPE, ...) => $RET"
+      - pattern-not: "$METHOD(..., $PARAM: $TYPE, ...) { ... }"
+      - pattern-not: function $FUNC(..., $PARAM = $DEFAULT, ...) { ... }
+      - pattern-not: (..., $PARAM = $DEFAULT, ...) => { ... }
+      - pattern-not: (..., $PARAM = $DEFAULT, ...) => $RET
+      - pattern-not: |
+          $METHOD(..., $PARAM = $DEFAULT, ...) { ... }
+      - focus-metavariable: $PARAM
+      - metavariable-regex: &function-parameter-name
+          metavariable: $PARAM
+          regex: ^(?!(req|request|res|response|reply|next|ctx|context|c|event|evt|env|err|error|e|formData)$)[A-Za-z$][\w$]*$
+  # TypeScript parameters whose type can hold a string
+  - label: ARG
+    patterns:
+      - pattern-either:
+          - pattern: "function $FUNC(..., $PARAM: $TYPE, ...) { ... }"
+          - pattern: "(..., $PARAM: $TYPE, ...) => { ... }"
+          - pattern: "(..., $PARAM: $TYPE, ...) => $RET"
+          - pattern: "$METHOD(..., $PARAM: $TYPE, ...) { ... }"
+      - metavariable-regex:
+          metavariable: $TYPE
+          regex: ^(?!\s*(?:number|boolean|bigint|Date|null|undefined|true|false|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')(?:\[\])?(?:\s*\|\s*(?:number|boolean|bigint|Date|null|undefined|true|false|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')(?:\[\])?)*\s*$)
+      - focus-metavariable: $PARAM
+      - metavariable-regex: *function-parameter-name
+  # untyped parameters whose default value is not a number/boolean
+  - label: ARG
+    patterns:
+      - pattern-either:
+          - pattern: function $FUNC(..., $PARAM = $DEFAULT, ...) { ... }
+          - pattern: (..., $PARAM = $DEFAULT, ...) => { ... }
+          - pattern: (..., $PARAM = $DEFAULT, ...) => $RET
+          - pattern: |
+              $METHOD(..., $PARAM = $DEFAULT, ...) { ... }
+      - metavariable-regex:
+          metavariable: $DEFAULT
+          regex: ^(?!(-?\d+(\.\d+)?|true|false)$)
+      - focus-metavariable: $PARAM
+      - metavariable-regex: *function-parameter-name
+  # Only string building counts (a + b on numbers, e.g. index arithmetic, does not).
+  - label: BUILT
+    requires: ARG
+    pattern-either:
+      - pattern: "`...${$X}...`"
+      - pattern: '"..." + $B'
+      - pattern: '$A + "..."'
+      - pattern: '("..." + $C) + $B'
+      - pattern: '($C + "...") + $B'
+
+x-command-sinks: &command-sinks
+  # child_process exec / execSync through a namespace import or require
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $CP = require('child_process');
+              ...
+          - pattern-inside: |
+              $CP = require('node:child_process');
+              ...
+          - pattern-inside: |
+              import $CP from 'child_process';
+              ...
+          - pattern-inside: |
+              import $CP from 'node:child_process';
+              ...
+          - pattern-inside: |
+              import * as $CP from 'child_process';
+              ...
+          - pattern-inside: |
+              import * as $CP from 'node:child_process';
+              ...
+      - pattern-either:
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: $CP.execSync($CMD, ...)
+  # exec / execSync imported by name (import or destructured require)
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $CPMOD = require('child_process');
+              ...
+          - pattern-inside: |
+              $CPMOD = require('node:child_process');
+              ...
+          - pattern-inside: |
+              import { $EXECFN } from 'child_process';
+              ...
+          - pattern-inside: |
+              import { $EXECFN } from 'node:child_process';
+              ...
+      - pattern: $EXECFN($CMD, ...)
+      - metavariable-regex:
+          metavariable: $EXECFN
+          regex: ^(exec|execSync)$
+  - pattern: require('child_process').exec($CMD, ...)
+  - pattern: require('child_process').execSync($CMD, ...)
+  - pattern: require('node:child_process').exec($CMD, ...)
+  - pattern: require('node:child_process').execSync($CMD, ...)
+  # const execAsync = promisify(exec)
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $EXECASYNC = promisify($EXEC);
+              ...
+          - pattern-inside: |
+              $EXECASYNC = $UTIL.promisify($EXEC);
+              ...
+      - pattern: $EXECASYNC($CMD, ...)
+      - metavariable-regex:
+          metavariable: $EXEC
+          regex: ^(.+\.)?exec$
+  # exec / execSync imported under another name, called directly or promisified
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              import { exec as $ALIAS } from 'child_process';
+              ...
+          - pattern-inside: |
+              import { exec as $ALIAS } from 'node:child_process';
+              ...
+          - pattern-inside: |
+              import { execSync as $ALIAS } from 'child_process';
+              ...
+          - pattern-inside: |
+              import { execSync as $ALIAS } from 'node:child_process';
+              ...
+          - pattern-inside: |
+              const { exec: $ALIAS } = require('child_process');
+              ...
+          - pattern-inside: |
+              const { exec: $ALIAS } = require('node:child_process');
+              ...
+          - pattern-inside: |
+              const { execSync: $ALIAS } = require('child_process');
+              ...
+          - pattern-inside: |
+              const { execSync: $ALIAS } = require('node:child_process');
+              ...
+      - pattern-either:
+          - pattern: $ALIAS($CMD, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $EXECASYNC = promisify($ALIAS);
+                      ...
+                  - pattern-inside: |
+                      $EXECASYNC = $UTIL.promisify($ALIAS);
+                      ...
+              - pattern: $EXECASYNC($CMD, ...)
+  # an explicit shell: spawn("sh", ["-c", cmd]), execFile("cmd.exe", ["/c", cmd])
+  - patterns:
+      - pattern-either:
+          - pattern: $SPAWN($SHELLBIN, [..., $SHELLFLAG, $CMD, ...], ...)
+          - pattern: $CP.$SPAWN($SHELLBIN, [..., $SHELLFLAG, $CMD, ...], ...)
+      - metavariable-regex:
+          metavariable: $SPAWN
+          regex: ^(spawn|spawnSync|execFile|execFileSync|execa|execaSync)$
+      - metavariable-regex:
+          metavariable: $SHELLBIN
+          regex: ^["'`]((/usr)?/bin/)?(sh|bash|zsh|dash|ksh|cmd|cmd\.exe|powershell|powershell\.exe|pwsh)["'`]$
+      - metavariable-regex:
+          metavariable: $SHELLFLAG
+          regex: ^["'`](-c|-lc|-ic|-ec|/c|/C|-Command|-command)["'`]$
+  # spawn / execFile / cross-spawn / execa with a shell enabled
+  - patterns:
+      - pattern-either:
+          - pattern: |
+              $SPAWN($CMD, {..., shell: $SHELL, ...})
+          - pattern: |
+              $SPAWN($CMD, $ARGS, {..., shell: $SHELL, ...})
+          - pattern: |
+              $SPAWN($BIN, $CMD, {..., shell: $SHELL, ...})
+          - pattern: |
+              $CP.$SPAWN($CMD, {..., shell: $SHELL, ...})
+          - pattern: |
+              $CP.$SPAWN($CMD, $ARGS, {..., shell: $SHELL, ...})
+          - pattern: |
+              $CP.$SPAWN($BIN, $CMD, {..., shell: $SHELL, ...})
+      - pattern-not: |
+          $SPAWN(..., {..., shell: false, ...})
+      - pattern-not: |
+          $CP.$SPAWN(..., {..., shell: false, ...})
+      - metavariable-regex:
+          metavariable: $SPAWN
+          regex: ^(spawn|spawnSync|execFile|execFileSync|execa|execaSync|execaCommand|execaCommandSync)$
+  # shelljs
+  - patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $SH = require('shelljs');
+              ...
+          - pattern-inside: |
+              import $SH from 'shelljs';
+              ...
+          - pattern-inside: |
+              import * as $SH from 'shelljs';
+              ...
+      - pattern: $SH.exec($CMD, ...)
+
+x-sql-sinks: &sql-sinks
+  # query/raw/prepare/execute/exec/unsafe on a receiver named like a SQL connection, pool, client,
+  # ORM data source or D1 binding. Other receivers (Vectorize, LlamaIndex query engines, GraphQL
+  # clients, superagent) also expose .query() but are not SQL.
+  - patterns:
+      - pattern-either:
+          - pattern: $DB.query($Q, ...)
+          - pattern: $DB.raw($Q, ...)
+          - pattern: $DB.prepare($Q, ...)
+          - pattern: $DB.execute($Q, ...)
+          - pattern: $DB.exec($Q, ...)
+          - pattern: $DB.unsafe($Q, ...)
+      - pattern-not: $DB.$SQLMETHOD({...}, ...)
+      - pattern-not: $DB.$SQLMETHOD(function (...) { ... }, ...)
+      - pattern-not: $DB.$SQLMETHOD((...) => $RET, ...)
+      - pattern-not: $DB.$SQLMETHOD("...", ...)
+      # Imported helpers such as Firestore query(collection(...)) are not SQL.
+      - pattern-not: query(...)
+      - pattern-not: prepare(...)
+      - pattern-not: raw(...)
+      # Hono c.req.query("q") / Express req.query is request input, not a database call.
+      - pattern-not: req.$SQLMETHOD(...)
+      - pattern-not: $CTX.req.$SQLMETHOD(...)
+      - metavariable-regex:
+          metavariable: $DB
+          regex: (?s)^\(?(await\s+)?(.+\.)?(db|DB|Db|database|Database|DATABASE|sql|SQL|sqlite|sqlite3|conn|con|connection|pool|client|tx|trx|transaction|knex|turso|libsql|pg|postgres|mysql|d1|D1|sequelize|dataSource|AppDataSource|manager|entityManager|queryRunner|Prisma|[A-Za-z_$][\w$]*(Db|DB|Database|DATABASE|Pool|POOL|Client|Conn|Connection|Sql|SQL|Sqlite|Sequelize|DataSource|Manager|QueryRunner|Repository|Repo|Tx|Trx|Transaction))(\(.*\))?\)?(\.(promise|request)\(\)(\.input\(.*\))*)?$
+  - patterns:
+      - pattern-either:
+          - pattern: $DB.$queryRawUnsafe($Q, ...)
+          - pattern: $DB.$executeRawUnsafe($Q, ...)
+      - pattern-not: $DB.$SQLMETHOD("...", ...)
+  - pattern: |
+      $DB.query({..., text: $Q, ...}, ...)
+  - pattern: |
+      $DB.query({..., sql: $Q, ...}, ...)
+  - pattern: |
+      $DB.execute({..., sql: $Q, ...}, ...)
+  - patterns:
+      - pattern: $DB.$RAWMETHOD($Q, ...)
+      - metavariable-regex:
+          metavariable: $RAWMETHOD
+          regex: ^(whereRaw|orWhereRaw|andWhereRaw|havingRaw|orHavingRaw|orderByRaw|groupByRaw|joinRaw|selectRaw|fromRaw|onRaw)$
+  # sqlite3 db.all/get/run/each and pg-promise db.any/one/none/many: these names are also used by
+  # key-value stores and HTTP clients, so the argument must visibly be SQL text.
+  - patterns:
+      - pattern: $DB.$SQLITEFN($Q, ...)
+      - metavariable-regex:
+          metavariable: $SQLITEFN
+          regex: ^(all|get|run|each|any|one|none|many|oneOrNone|manyOrNone|result|multi)$
+      - metavariable-regex:
+          metavariable: $DB
+          regex: ^(.+\.)?(db|DB|database|Database|sqlite|sqlite3|conn|connection|t|tx|task|[A-Za-z_$][\w$]*(Db|DB|Database|Sqlite|Conn|Connection))$
+      - metavariable-regex:
+          metavariable: $Q
+          regex: (?is)^(sql|query|stmt|statement|sqlQuery|queryText|[a-z][\w$]*(Sql|Stmt|Statement))$|^[`"'(].*\b(select\b.*\bfrom|insert\s+into|update\b.*\bset|delete\s+from|replace\s+into|create\s+(table|index|view)|drop\s+(table|index|view)|alter\s+table|pragma)\b
+  - patterns:
+      - pattern: $SEQ.literal($Q)
+      - metavariable-regex:
+          metavariable: $SEQ
+          regex: ^(.+\.)?[Ss]equelize$
+  # TypeORM-style string conditions: .where(`user.id = ${id}`) or .where(`...`, { params }).
+  # Knex where(column, value) and Firestore where(field, "==", value) quote the field, so they
+  # are not sinks.
+  - patterns:
+      - pattern-either:
+          - pattern: $QB.$WHERE(`...${$E}...`)
+          - pattern: $QB.$WHERE("..." + $E)
+          - pattern: $QB.$WHERE($E + "...")
+          - pattern: $QB.$WHERE(`...${$E}...`, {...})
+          - pattern: $QB.$WHERE("..." + $E, {...})
+          - pattern: $QB.$WHERE($E + "...", {...})
+      - pattern: $QB.$WHERE($Q, ...)
+      - pattern-not: where(...)
+      - metavariable-regex:
+          metavariable: $WHERE
+          regex: ^(where|andWhere|orWhere|having|andHaving|orHaving)$
+
+# Value escaping that makes a SQL string safe to build.
+x-sql-escape-sanitizers: &sql-escape-sanitizers
+  # escape(), escapeId(), escapeLiteral(), quoteIdentifier(), pg-format style helpers
+  - patterns:
+      - pattern: $ESCAPE(...)
+      - metavariable-regex:
+          metavariable: $ESCAPE
+          regex: (?i)^(.+\.)?\w*(quote|escape)\w*$
+  # mysql/mysql2/sqlstring format("... ? ...", values) escapes the values
+  - patterns:
+      - pattern: $FMT.format("...", ...)
+      - metavariable-regex:
+          metavariable: $FMT
+          regex: ^(.+\.)?(mysql|mysql2|SqlString|sqlstring|sqlString|connection|conn|pool|db)$
+  # pg-format with %L / %I placeholders only (no raw %s), and format.ident() / format.literal()
+  - patterns:
+      - pattern: $PGFORMAT("$FMTSTRING", ...)
+      - metavariable-regex:
+          metavariable: $PGFORMAT
+          regex: ^(format|pgFormat|pgformat)$
+      - metavariable-regex:
+          metavariable: $FMTSTRING
+          regex: (?s)^(?:[^%]|%[ILdif%])*$
+  - patterns:
+      - pattern: $PGFORMAT.$PGFN(...)
+      - metavariable-regex:
+          metavariable: $PGFORMAT
+          regex: (?i)^(.+\.)?(pg)?format$
+      - metavariable-regex:
+          metavariable: $PGFN
+          regex: ^(ident|literal)$
+
+# Test files and mocks are not reachable by attackers; the non-request tiers skip them.
+x-skip-test-files: &skip-test-files
+  exclude:
+    - "*.test.*"
+    - "*.spec.*"
+    - "**/__tests__/**"
+    - "**/__mocks__/**"
+
+rules:
+  # ===========================================================================
+  # Code injection
+  # ===========================================================================
+  - id: ethos.js.code-injection-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      HTTP request data reaches a code-evaluation API (eval, new Function, vm, a string timer,
+      MongoDB $where, or a dynamic require()/import() path), so an attacker can run arbitrary code.
+      Never evaluate or load modules from request data; parse it as data (JSON.parse, a schema
+      validator) or map it to a fixed set of allowed operations or modules.
+    metadata:
+      cwe: ["CWE-94", "CWE-95"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources: *request-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: Number.parseInt(...)
+      - pattern: Number.parseFloat(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Boolean(...)
+      - pattern: $X.length
+      - pattern: JSON.stringify(...)
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      # if (!/^[\d+\-*/ ().]+$/.test(expr)) return ...; allowlist checks
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $RE.test($X)
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($CODE)
+              - patterns:
+                  - pattern: $GLOBAL.eval($CODE)
+                  - metavariable-regex:
+                      metavariable: $GLOBAL
+                      regex: ^(window|globalThis|global|self)$
+              - pattern: new Function(..., $CODE)
+              - pattern: Function(..., $CODE)
+              - pattern: setTimeout($CODE, ...)
+              - pattern: setInterval($CODE, ...)
+              - pattern: $VM.runInNewContext($CODE, ...)
+              - pattern: $VM.runInThisContext($CODE, ...)
+              - pattern: $VM.runInContext($CODE, ...)
+              - pattern: $VM.compileFunction($CODE, ...)
+              - pattern: new $VM.Script($CODE, ...)
+              - pattern: new Script($CODE, ...)
+              - pattern: |
+                  {..., $where: $CODE, ...}
+              - pattern: $QUERY.$where($CODE)
+              - pattern: require($CODE)
+              - pattern: import($CODE)
+          - focus-metavariable: $CODE
+
+  - id: ethos.js.dynamic-code-evaluation
+    languages: [javascript, typescript]
+    paths: *skip-test-files
+    severity: WARNING
+    message: >-
+      Code is evaluated from a non-literal string (eval, new Function, vm, a string timer or
+      MongoDB $where). If any part of that string can come from users or external data this is
+      code injection; replace it with explicit logic, a lookup table or a safe expression parser.
+    metadata:
+      cwe: ["CWE-95"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: eval($CODE)
+          - patterns:
+              - pattern: $GLOBAL.eval($CODE)
+              - metavariable-regex:
+                  metavariable: $GLOBAL
+                  regex: ^(window|globalThis|global|self)$
+          - pattern: new Function(..., $CODE)
+          - pattern: Function(..., $CODE)
+          - pattern: $VM.runInNewContext($CODE, ...)
+          - pattern: $VM.runInThisContext($CODE, ...)
+          - pattern: $VM.runInContext($CODE, ...)
+          - pattern: $VM.compileFunction($CODE, ...)
+          - pattern: new $VM.Script($CODE, ...)
+          - pattern: |
+              {..., $where: $CODE, ...}
+          - pattern: $QUERY.$where($CODE)
+          - pattern: setTimeout("..." + $X, ...)
+          - pattern: setTimeout($X + "...", ...)
+          - pattern: setTimeout(`...${$X}...`, ...)
+          - pattern: setInterval("..." + $X, ...)
+          - pattern: setInterval($X + "...", ...)
+          - pattern: setInterval(`...${$X}...`, ...)
+      # Literal code and function values are not dynamic code.
+      - pattern-not: eval("...")
+      - pattern-not: $GLOBAL.eval("...")
+      - pattern-not: new Function(..., "...")
+      - pattern-not: Function(..., "...")
+      - pattern-not: $VM.$VMFN("...", ...)
+      - pattern-not: new $VM.Script("...", ...)
+      - pattern-not: |
+          {..., $where: "...", ...}
+      - pattern-not: |
+          {..., $where: function (...) { ... }, ...}
+      - pattern-not: |
+          {..., $where: (...) => { ... }, ...}
+      - pattern-not: |
+          {..., $where: (...) => $RET, ...}
+      - pattern-not: $QUERY.$where("...")
+      - pattern-not: $QUERY.$where(function (...) { ... })
+      - pattern-not: $QUERY.$where((...) => { ... })
+      - pattern-not: $QUERY.$where((...) => $RET)
+      # Request handlers are covered by ethos.js.code-injection-from-request (taint).
+      - pattern-not-inside: function $F(..., req, ...) { ... }
+      - pattern-not-inside: function $F(..., request, ...) { ... }
+      - pattern-not-inside: (..., req, ...) => { ... }
+      - pattern-not-inside: (..., request, ...) => { ... }
+      - pattern-not-inside: (..., req, ...) => $RET
+      - pattern-not-inside: (..., request, ...) => $RET
+      - pattern-not-inside: |
+          $METHOD(..., req, ...) { ... }
+      - pattern-not-inside: |
+          $METHOD(..., request, ...) { ... }
+      - pattern-not-inside: $APP.$VERB("=~/^\//", ...)
+
+  # ===========================================================================
+  # OS command injection
+  # ===========================================================================
+  - id: ethos.js.command-injection-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      HTTP request data is passed to a shell command (child_process exec/execSync, promisified
+      exec, or spawn/execFile/execa with shell enabled), allowing OS command injection. Use
+      execFile/spawn with a fixed program and an argument array, keep the shell disabled, and
+      validate each argument against an allowlist.
+    metadata:
+      cwe: ["CWE-78"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources: *request-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: Number.parseInt(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      - pattern: $X.length
+      # shell-quote quote(), shell-escape, escapeShellArg() and similar helpers
+      - patterns:
+          - pattern: $ESCAPE(...)
+          - metavariable-regex:
+              metavariable: $ESCAPE
+              regex: (?i)^(.+\.)?\w*(quote|escape)\w*$
+      - patterns:
+          - pattern: $STR.replace($RE, ...)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\[\^
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either: *command-sinks
+          - focus-metavariable: $CMD
+
+  - id: ethos.js.shell-command-from-function-argument
+    languages: [javascript, typescript]
+    paths: *skip-test-files
+    severity: WARNING
+    message: >-
+      A function argument is interpolated into a shell command (child_process exec/execSync,
+      promisified exec, or spawn/execFile/execa with shell enabled). If a caller ever passes
+      user-influenced data this becomes OS command injection; prefer execFile/spawn with an
+      argument array and the shell disabled.
+    metadata:
+      cwe: ["CWE-78"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+    mode: taint
+    pattern-sources: *function-argument-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: $X.length
+      - patterns:
+          - pattern: $ESCAPE(...)
+          - metavariable-regex:
+              metavariable: $ESCAPE
+              regex: (?i)^(.+\.)?\w*(quote|escape)\w*$
+      - patterns:
+          - pattern: $STR.replace($RE, ...)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\[\^
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+          - focus-metavariable: $X
+    pattern-sinks:
+      - requires: BUILT
+        patterns:
+          - pattern-either: *command-sinks
+          - focus-metavariable: $CMD
+
+  # ===========================================================================
+  # SQL injection
+  # ===========================================================================
+  - id: ethos.js.sql-injection-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      HTTP request data is concatenated or interpolated into a SQL string that is executed (query,
+      execute, raw, prepare, all/get/run, $queryRawUnsafe), allowing SQL injection. Keep the SQL text
+      fixed and pass values as bound parameters (db.query(sql, [id]) with ? or numbered
+      placeholders, .prepare(sql).bind(id)) or use a tagged template such as sql`...` /
+      prisma.$queryRaw`...`.
+    metadata:
+      cwe: ["CWE-89"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources: *request-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: Number.parseInt(...)
+      - pattern: Number.parseFloat(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Boolean(...)
+      - pattern: Math.$FN(...)
+      - pattern: $X.length
+      - pattern: $TAG`...`
+      # node-postgres / mysql2 / libsql query objects with bound values
+      - pattern: |
+          {..., text: $SQLTEXT, ..., values: $VALUES, ...}
+      - pattern: |
+          {..., sql: $SQLTEXT, ..., values: $VALUES, ...}
+      - pattern: |
+          {..., sql: $SQLTEXT, ..., args: $VALUES, ...}
+      # Placeholder lists: ids.map(() => "?"), ids.map((_, i) => `$${i + 1}`)
+      - pattern: $ARR.map(() => $BODY)
+      - patterns:
+          - pattern-either:
+              - pattern: $ARR.map(($ITEM) => $BODY)
+              - pattern: $ARR.map(($ITEM, $IDX) => $BODY)
+          - pattern-not: $ARR.map(($ITEM, ...) => <... $ITEM ...>)
+      # escape helpers, mysql format(), pg-format %L/%I
+      - pattern-either: *sql-escape-sanitizers
+      # Allowlist checks: ALLOWED.includes(x) ? x : "id", keys.filter((k) => ALLOWED.has(k))
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      - pattern: $ARR.filter(($K) => $LIST.includes($K))
+      - pattern: $ARR.filter(($K) => $LIST.has($K))
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either: *sql-sinks
+          - focus-metavariable: $Q
+
+  - id: ethos.js.sql-string-from-function-argument
+    languages: [javascript, typescript]
+    paths: *skip-test-files
+    severity: WARNING
+    message: >-
+      A function argument is concatenated or interpolated into a SQL string that is executed. If a
+      caller ever passes user-influenced data this becomes SQL injection; use placeholders with bound
+      parameters or a tagged template (sql`...`, prisma.$queryRaw`...`) instead.
+    metadata:
+      cwe: ["CWE-89"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources: *function-argument-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: Number.parseInt(...)
+      - pattern: Number.parseFloat(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Boolean(...)
+      - pattern: Math.$FN(...)
+      - pattern: $X.length
+      - pattern: $TAG`...`
+      - pattern: |
+          {..., text: $SQLTEXT, ..., values: $VALUES, ...}
+      - pattern: |
+          {..., sql: $SQLTEXT, ..., values: $VALUES, ...}
+      - pattern: |
+          {..., sql: $SQLTEXT, ..., args: $VALUES, ...}
+      - pattern: $ARR.map(() => $BODY)
+      - patterns:
+          - pattern-either:
+              - pattern: $ARR.map(($ITEM) => $BODY)
+              - pattern: $ARR.map(($ITEM, $IDX) => $BODY)
+          - pattern-not: $ARR.map(($ITEM, ...) => <... $ITEM ...>)
+      # escape helpers, mysql format(), pg-format %L/%I
+      - pattern-either: *sql-escape-sanitizers
+      # Allowlist checks: ALLOWED.includes(x) ? x : "id", keys.filter((k) => ALLOWED.has(k))
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      - pattern: $ARR.filter(($K) => $LIST.includes($K))
+      - pattern: $ARR.filter(($K) => $LIST.has($K))
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+          - focus-metavariable: $X
+    pattern-sinks:
+      - requires: BUILT
+        patterns:
+          - pattern-either: *sql-sinks
+          - focus-metavariable: $Q
+
+  # ===========================================================================
+  # NoSQL (MongoDB / Mongoose) injection
+  # ===========================================================================
+  - id: ethos.js.nosql-injection-request-object
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A whole request object (req.body, req.query or parsed JSON) is used as a MongoDB/Mongoose
+      query filter, so an attacker can inject operators such as {"$ne": null} or {"$gt": ""} to
+      bypass checks or read and delete other records. Build the filter from individual fields that
+      are converted to plain strings/numbers, or enable Mongoose sanitizeFilter.
+    metadata:
+      cwe: ["CWE-943"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.body
+              - pattern: $REQ.query
+          - pattern-not-inside: $REQ.$FIELD.$SUB
+          - pattern-not-inside: $REQ.$FIELD[$KEY]
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(.+\.)?(req|request)$
+      - patterns:
+          - pattern: $REQ.json()
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(.+\.)?(req|request)$
+      # const { page, ...filters } = req.query (taint does not flow through rest elements)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  const {..., ...$REST} = $REQ.$OBJ;
+                  ...
+              - pattern-inside: |
+                  let {..., ...$REST} = $REQ.$OBJ;
+                  ...
+          - pattern: $REST
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(.+\.)?(req|request)$
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: ^(body|query)$
+      - patterns:
+          - pattern-either:
+              - pattern: JSON.parse($REQ.query.$FIELD)
+              - pattern: JSON.parse($REQ.body.$FIELD)
+              - pattern: JSON.parse($REQ.query[$KEY])
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(.+\.)?(req|request)$
+    pattern-sanitizers:
+      - pattern: mongoSanitize.sanitize(...)
+      - pattern: sanitizeFilter(...)
+      - pattern: $MONGOOSE.sanitizeFilter(...)
+      - pattern: String(...)
+      # Schema validation (zod, Joi, yup, valibot) returns a typed object, not raw operators.
+      - patterns:
+          - pattern-either:
+              - pattern: $SCHEMA.parse(...)
+              - pattern: $SCHEMA.safeParse(...)
+              - pattern: $SCHEMA.parseAsync(...)
+              - pattern: $SCHEMA.safeParseAsync(...)
+              - pattern: $SCHEMA.validate(...)
+              - pattern: $SCHEMA.validateAsync(...)
+              - pattern: $SCHEMA.validateSync(...)
+          - metavariable-regex:
+              metavariable: $SCHEMA
+              regex: ^(?!(JSON|qs|querystring|QueryString|url|URL|path|Date|bodyParser|cookie|cookieParser)$)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.$FIND($FILTER, ...)
+              - pattern: |
+                  $MODEL.$FIND({..., ...$FILTER, ...}, ...)
+          - metavariable-regex:
+              metavariable: $FIND
+              regex: ^(find|findOne|findOneAndUpdate|findOneAndDelete|findOneAndReplace|findOneAndRemove|updateOne|updateMany|deleteOne|deleteMany|replaceOne|countDocuments)$
+          # The filter itself must be the request object (not a field such as user.id).
+          - metavariable-regex:
+              metavariable: $FILTER
+              regex: (?s)^(await\s+)?([A-Za-z_$][\w$]*|(.+\.)?(req|request)\.(body|query)|JSON\.parse\(.*\)|(.+\.)?(req|request)\.json\(\))$
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: |
+              $MODEL.aggregate([..., {$match: $FILTER}, ...], ...)
+          - focus-metavariable: $FILTER
+
+  # ===========================================================================
+  # Path traversal
+  # ===========================================================================
+  - id: ethos.js.path-traversal-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      HTTP request data is used to build a filesystem path (fs read/write/delete, res.sendFile,
+      res.download), so "../" sequences or absolute paths can reach files outside the intended
+      folder. Reduce the input to a file name with path.basename(), resolve it against a fixed base
+      directory and reject results that do not start with that directory (or pass { root } to
+      res.sendFile).
+    metadata:
+      cwe: ["CWE-22"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources: *request-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: $X.length
+      - pattern: $PATH.basename(...)
+      - pattern: basename(...)
+      - pattern: sanitize(...)
+      - pattern: sanitizeFilename(...)
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      - patterns:
+          - pattern: $STR.replace($RE, ...)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\[\^
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startsWith(...)
+              - pattern: $X.includes("..")
+              - pattern: $X.indexOf("..")
+              - pattern: $RE.test($X)
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+              - pattern: $PATH.relative($ROOT, $X)
+              # realpath() is used to compare the canonical path against the base directory
+              - pattern: $FS.realpathSync($X, ...)
+              - pattern: $FS.realpath($X, ...)
+              - pattern: realpathSync($X, ...)
+              - pattern: realpath($X, ...)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE($X)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(.+\.)?\w*(allow|valid|safe|trust|permit|whitelist)\w*$
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern: $FS.$FSFN($P, ...)
+                          - metavariable-regex:
+                              metavariable: $FSFN
+                              regex: ^(readFile|readFileSync|createReadStream|createWriteStream|writeFile|writeFileSync|appendFile|appendFileSync|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|readdir|readdirSync|open|openSync|readJson|readJSON|readJsonSync|writeJson|writeJSON|outputFile|outputJson|remove|removeSync|copyFile|copyFileSync|rename|renameSync)$
+                      - patterns:
+                          - pattern: $FS.$FSFN2($FROM, $P, ...)
+                          - metavariable-regex:
+                              metavariable: $FSFN2
+                              regex: ^(copyFile|copyFileSync|rename|renameSync|copy|move|cp|cpSync)$
+                  - metavariable-regex:
+                      metavariable: $FS
+                      regex: ^(fs|fsp|fsPromises|fs\.promises|promises|fse|fsExtra|fsx|fsSync|nodeFs|fsAsync)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $FSMOD = require('fs');
+                          ...
+                      - pattern-inside: |
+                          $FSMOD = require('node:fs');
+                          ...
+                      - pattern-inside: |
+                          $FSMOD = require('fs/promises');
+                          ...
+                      - pattern-inside: |
+                          $FSMOD = require('node:fs/promises');
+                          ...
+                      - pattern-inside: |
+                          import { $FSFN } from 'fs';
+                          ...
+                      - pattern-inside: |
+                          import { $FSFN } from 'node:fs';
+                          ...
+                      - pattern-inside: |
+                          import { $FSFN } from 'fs/promises';
+                          ...
+                      - pattern-inside: |
+                          import { $FSFN } from 'node:fs/promises';
+                          ...
+                  - pattern: $FSFN($P, ...)
+                  - metavariable-regex:
+                      metavariable: $FSFN
+                      regex: ^(readFile|readFileSync|createReadStream|createWriteStream|writeFile|writeFileSync|appendFile|appendFileSync|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|readdir|readdirSync|open|openSync|readJson|readJSON|readJsonSync|writeJson|writeJSON|outputFile|outputJson|remove|removeSync|copyFile|copyFileSync|rename|renameSync)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $RES.sendFile($P, ...)
+                  - pattern-not: |
+                      $RES.sendFile($P, {..., root: $ROOT, ...}, ...)
+              - patterns:
+                  - pattern: $RES.download($P, ...)
+                  - pattern-not: |
+                      $RES.download($P, ..., {..., root: $ROOT, ...}, ...)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|response)$
+          - focus-metavariable: $P
+
+  # ===========================================================================
+  # Server-side request forgery
+  # ===========================================================================
+  - id: ethos.js.ssrf-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      HTTP request data controls the URL or host of a server-side HTTP request (fetch, axios, got,
+      http.get, undici), so an attacker can make the server call internal services or cloud
+      metadata endpoints (SSRF). Keep the scheme and host fixed in code, or parse the URL and check
+      its hostname against an allowlist before sending the request.
+    metadata:
+      cwe: ["CWE-918"]
+      owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources: *request-input-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: $X.length
+      - pattern: encodeURIComponent(...)
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      # Template or concatenation whose scheme and host (or a leading "/segment") are fixed in code.
+      - patterns:
+          - pattern: "`...`"
+          - pattern-regex: '`(?:https?://[^/?#"''`$\\{}\s]+[/?#]|/[^/\\`$]|\$\{\s*(?:process\.env\.\w+|import\.meta\.env\.\w+|env\.\w+|this\.\w+|config\.\w+|[A-Z][A-Z0-9_]*)\s*\}[/?#])[^`]*`'
+      - patterns:
+          - pattern: $LEFT + $RIGHT
+          - metavariable-regex:
+              metavariable: $LEFT
+              regex: '^(?:["''`]https?://[^/?#"''`$\\]+[/?#]|["''`]/[^/\\"''`$]|(?:process\.env\.\w+|import\.meta\.env\.\w+|env\.\w+|this\.\w+|config\.\w+|[A-Z][A-Z0-9_]*)\s*\+\s*["''`][/?#])'
+      # `${apiBaseUrl}/path` where apiBaseUrl comes from process.env or a literal
+      - pattern-either: *fixed-base-url-sanitizers
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+              - pattern: $RE.test($X)
+          # Only one by-side-effect sanitizer applies per call: leave url.hostname checks to the next entry.
+          - pattern-not: $LIST.includes($OBJ.$PROP)
+          - pattern-not: $LIST.has($OBJ.$PROP)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X.$URLPART)
+              - pattern: $LIST.has($X.$URLPART)
+              - pattern: $X.$URLPART === $V
+              - pattern: $X.$URLPART !== $V
+              - pattern: $X.$URLPART == $V
+              - pattern: $X.$URLPART != $V
+              # const host = url.hostname; ...checks on host...
+              - pattern: $HOSTVAR = $X.$URLPART
+          - metavariable-regex:
+              metavariable: $URLPART
+              regex: ^(hostname|host|origin)$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE($X)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(.+\.)?\w*(allow|valid|safe|trust|permit|whitelist)\w*$
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: globalThis.fetch($URL, ...)
+              - patterns:
+                  - pattern: $FETCHFN($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $FETCHFN
+                      regex: ^(fetch|axios|got|ky|ofetch|\$fetch|nodeFetch|request|needle)$
+              - patterns:
+                  - pattern: $CLIENT.$VERB($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $CLIENT
+                      regex: ^(axios|got|ky|superagent|needle|undici|ofetch|nodeFetch)$
+                  - metavariable-regex:
+                      metavariable: $VERB
+                      regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          $AXIOS({..., url: $URL, ...})
+                      - pattern: |
+                          $AXIOS.request({..., url: $URL, ...})
+                  - metavariable-regex:
+                      metavariable: $AXIOS
+                      regex: ^(axios|got|ky|ofetch)$
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-either:
+                              - pattern: $HTTP.get($URL, ...)
+                              - pattern: $HTTP.request($URL, ...)
+                          - pattern-not: $HTTP.$HTTPFN({...}, ...)
+                      - pattern: |
+                          $HTTP.get({..., host: $URL, ...}, ...)
+                      - pattern: |
+                          $HTTP.get({..., hostname: $URL, ...}, ...)
+                      - pattern: |
+                          $HTTP.request({..., host: $URL, ...}, ...)
+                      - pattern: |
+                          $HTTP.request({..., hostname: $URL, ...}, ...)
+                  - metavariable-regex:
+                      metavariable: $HTTP
+                      regex: ^(http|https)$
+          - focus-metavariable: $URL
+
+  # ===========================================================================
+  # Open redirect
+  # ===========================================================================
+  - id: ethos.js.open-redirect-from-request
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A redirect target (res.redirect, Response.redirect, the Location header) comes from the
+      request, so attackers can craft links on your domain that forward users to a phishing site.
+      Redirect only to relative paths you build yourself or to URLs checked against an allowlist of
+      hosts (and reject values starting with "//").
+    metadata:
+      cwe: ["CWE-601"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+    mode: taint
+    # Headers and cookies are deliberately not sources here (Host/Referer redirects are noisy).
+    pattern-sources: *request-input-sources
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: encodeURIComponent(...)
+      - pattern: "$LIST.includes(...) ? $A : $B"
+      - pattern: "$LIST.has(...) ? $A : $B"
+      # Template or concatenation whose scheme and host (or a leading "/segment") are fixed in code.
+      - patterns:
+          - pattern: "`...`"
+          - pattern-regex: '`(?:https?://[^/?#"''`$\\{}\s]+[/?#]|/[^/\\`$]|\$\{\s*(?:process\.env\.\w+|import\.meta\.env\.\w+|env\.\w+|this\.\w+|config\.\w+|[A-Z][A-Z0-9_]*)\s*\}[/?#])[^`]*`'
+      - patterns:
+          - pattern: $LEFT + $RIGHT
+          - metavariable-regex:
+              metavariable: $LEFT
+              regex: '^(?:["''`]https?://[^/?#"''`$\\]+[/?#]|["''`]/[^/\\"''`$]|(?:process\.env\.\w+|import\.meta\.env\.\w+|env\.\w+|this\.\w+|config\.\w+|[A-Z][A-Z0-9_]*)\s*\+\s*["''`][/?#])'
+      # `${frontendUrl}/path` where frontendUrl comes from process.env or a literal
+      - pattern-either: *fixed-base-url-sanitizers
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startsWith(...)
+              - pattern: $LIST.includes($X)
+              - pattern: $LIST.has($X)
+              - pattern: $RE.test($X)
+          # Only one by-side-effect sanitizer applies per call: leave url.hostname checks to the next entry.
+          - pattern-not: $LIST.includes($OBJ.$PROP)
+          - pattern-not: $LIST.has($OBJ.$PROP)
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes($X.$URLPART)
+              - pattern: $LIST.has($X.$URLPART)
+              - pattern: $X.$URLPART === $V
+              - pattern: $X.$URLPART !== $V
+              - pattern: $HOSTVAR = $X.$URLPART
+          - metavariable-regex:
+              metavariable: $URLPART
+              regex: ^(hostname|host|origin)$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE($X)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(.+\.)?\w*(allow|valid|safe|trust|permit|whitelist)\w*$
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.redirect($URL, ...)
+              - pattern: $RES.redirect($STATUS, $URL)
+              - pattern: $RES.location($URL)
+              - pattern: Response.redirect($URL, ...)
+              - pattern: NextResponse.redirect($URL, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $RES.setHeader($HEADER, $URL)
+                      - pattern: $RES.set($HEADER, $URL)
+                      - pattern: $RES.header($HEADER, $URL)
+                      - pattern: $RES.append($HEADER, $URL)
+                  - metavariable-regex:
+                      metavariable: $HEADER
+                      regex: (?i)^["'`]location["'`]$
+              - pattern: |
+                  $RES.writeHead($CODE, {..., Location: $URL, ...})
+              - pattern: |
+                  $RES.writeHead($CODE, {..., location: $URL, ...})
+              - pattern: |
+                  $RES.writeHead($CODE, {..., "Location": $URL, ...})
+              - pattern: |
+                  new Response($BODY, {..., headers: {..., Location: $URL, ...}, ...})
+              - pattern: |
+                  new Response($BODY, {..., headers: {..., location: $URL, ...}, ...})
+              - pattern: |
+                  new Response($BODY, {..., headers: {..., "Location": $URL, ...}, ...})
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { redirect } from 'next/navigation';
+                          ...
+                      - pattern-inside: |
+                          import { redirect } from '@remix-run/node';
+                          ...
+                      - pattern-inside: |
+                          import { redirect } from '@remix-run/cloudflare';
+                          ...
+                      - pattern-inside: |
+                          import { redirect } from 'react-router';
+                          ...
+                  - pattern: redirect($URL, ...)
+          - focus-metavariable: $URL

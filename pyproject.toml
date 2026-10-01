@@ -18,4 +18,4 @@ ethos-sec = "ethossecurity.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ethossecurity = ["schemas/*.json", "rules/*.yaml", "rules/*.toml", "assets/*.json", "assets/skills/*/SKILL.md", "assets/adapters/*/*", "assets/ethossecurity.yaml"]
+ethossecurity = ["schemas/*.json", "rules/*.toml", "rules/semgrep/*.yaml", "assets/*.json", "assets/skills/*/SKILL.md", "assets/adapters/*/*", "assets/ethossecurity.yaml"]

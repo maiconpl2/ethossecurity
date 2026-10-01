@@ -1,0 +1,182 @@
+rules:
+  # Untrusted event fields (attacker-controlled text) that must never be expanded with ${{ }} inside a script:
+  # issue/PR/discussion titles and bodies, comment and review bodies, branch names (head_ref, head.ref,
+  # head.label, workflow_run.head_branch), commit messages and author/committer names or e-mails, wiki page
+  # names, workflow_run.display_title, and toJSON() of whole issue/PR/comment/commit objects.
+  # Expressions that only compare values (==, !=, <, >, contains, startsWith, endsWith, hashFiles, fromJSON,
+  # a leading !) produce true/false and are skipped.
+  - id: ethos.yaml.github-actions-run-script-injection
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      Untrusted event data (issue or pull request text, comments, branch names, commit messages) is
+      expanded with an expression directly inside a run script, so anyone who can open an issue or pull
+      request can inject shell commands. Map the value to an env variable and reference it as "$VAR" instead.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - "action.yml"
+        - "action.yaml"
+    patterns:
+      - pattern-inside: "steps: [...]"
+      - pattern: "run: $SCRIPT"
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: >-
+            (?s).*?\$\{\{(?!(?:[^}']|'[^']*')*?(?:==|!=|<|>|\b(?i:contains|startswith|endswith|hashfiles|fromjson)\s*\())(?:[^}']|'[^']*')*?(?<![\w.!])(?:github\.head_ref|(?i:tojson)\(\s*github\.event\.(?:issue|pull_request|comment|review|review_comment|discussion|head_commit|commits|workflow_run)\s*\)|github\.event\.(?:issue\.(?:title|body)|pull_request\.(?:title|body|head\.(?:ref|label|repo\.default_branch))|comment\.body|review\.body|review_comment\.body|discussion\.(?:title|body)|head_commit\.(?:message|(?:author|committer)\.(?:name|email))|commits(?:\.\*|\[\d+\])\.(?:message|(?:author|committer)\.(?:name|email))|pages(?:\.\*|\[\d+\])\.page_name|workflow_run\.(?:head_branch|display_title|head_commit\.(?:message|(?:author|committer)\.(?:name|email)))))(?![\w.\[])
+    metadata:
+      cwe: ["CWE-78", "CWE-94"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+
+  - id: ethos.yaml.github-actions-github-script-injection
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      Untrusted event data (issue or pull request text, comments, branch names, commit messages) is
+      expanded with an expression directly inside an actions/github-script script, so an attacker can inject
+      JavaScript that runs with the workflow token. Pass the value through env and read it with process.env instead.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - "action.yml"
+        - "action.yaml"
+    patterns:
+      - pattern-inside: "steps: [...]"
+      - pattern-inside: |
+          uses: $ACTION
+          ...
+      - metavariable-regex:
+          metavariable: $ACTION
+          regex: ^['"]?actions/github-script@
+      - pattern: "script: $SCRIPT"
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: >-
+            (?s).*?\$\{\{(?!(?:[^}']|'[^']*')*?(?:==|!=|<|>|\b(?i:contains|startswith|endswith|hashfiles|fromjson)\s*\())(?:[^}']|'[^']*')*?(?<![\w.!])(?:github\.head_ref|(?i:tojson)\(\s*github\.event\.(?:issue|pull_request|comment|review|review_comment|discussion|head_commit|commits|workflow_run)\s*\)|github\.event\.(?:issue\.(?:title|body)|pull_request\.(?:title|body|head\.(?:ref|label|repo\.default_branch))|comment\.body|review\.body|review_comment\.body|discussion\.(?:title|body)|head_commit\.(?:message|(?:author|committer)\.(?:name|email))|commits(?:\.\*|\[\d+\])\.(?:message|(?:author|committer)\.(?:name|email))|pages(?:\.\*|\[\d+\])\.page_name|workflow_run\.(?:head_branch|display_title|head_commit\.(?:message|(?:author|committer)\.(?:name|email)))))(?![\w.\[])
+    metadata:
+      cwe: ["CWE-94"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+
+  - id: ethos.yaml.github-actions-pull-request-target-checkout
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      This pull_request_target workflow checks out the pull request's untrusted code (actions/checkout with the
+      PR head ref, or gh pr checkout / git fetch of the PR ref) in a privileged context with repository secrets
+      and a write-capable token; if any later step installs, builds or runs it, any fork can take over the
+      repository. Use the pull_request trigger for untrusted code, or gate the job on a trusted condition such
+      as a maintainer label or a same-repository check.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    patterns:
+      # Triggered by pull_request_target (mapping, list or string form; "on" quoted or not).
+      - pattern-either:
+          - pattern-inside: |
+              on:
+                ...
+                pull_request_target: ...
+                ...
+              ...
+          - pattern-inside: |
+              on: [..., pull_request_target, ...]
+              ...
+          - pattern-inside: |
+              on: pull_request_target
+              ...
+          - pattern-inside: |
+              "on":
+                ...
+                pull_request_target: ...
+                ...
+              ...
+          - pattern-inside: |
+              "on": [..., pull_request_target, ...]
+              ...
+          - pattern-inside: |
+              "on": pull_request_target
+              ...
+      - pattern-inside: "steps: [...]"
+      # Skip jobs and steps whose "if:" only lets trusted pull requests through: same-repository branches,
+      # non-forks, a maintainer label (but not "!contains(... labels ...)"), merged PRs, maintainer authors,
+      # GitHub App bot authors, or runs that are not pull_request_target. The github.actor check is not trusted.
+      - pattern-not-inside: |
+          if: '=~/head\.repo\.full_name\s*==\s*github\.repository\b|github\.repository\s*==\s*github\.event\.pull_request\.head\.repo\.full_name\b|head\.repo\.owner\.login\s*==\s*github\.repository_owner\b|head\.repo\.fork\s*==\s*false|false\s*==\s*github\.event\.pull_request\.head\.repo\.fork\b|!\s*github\.event\.pull_request\.head\.repo\.fork\b/'
+          ...
+      - pattern-not-inside: |
+          if: '=~/github\.event\.label\.name\s*==|(?<![!\w])(?<!!\s)contains\(\s*github\.event\.pull_request\.labels\.\*\.name\b|(?<![!\w.])github\.event\.pull_request\.merged\b(?!\s*(?:==\s*false|!=\s*true))/'
+          ...
+      - pattern-not-inside: |
+          if: '=~/author_association\s*==\s*[''"](?:OWNER|MEMBER|COLLABORATOR)[''"]|[''"](?:OWNER|MEMBER|COLLABORATOR)[''"]\s*==\s*github\.event\.[\w.]*author_association|(?<![!\w])(?<!!\s)contains\(\s*(?:(?i:fromjson)\(\s*)?[''"][^)]*?(?:OWNER|MEMBER|COLLABORATOR)[^)]*?[''"]\s*\)?\s*,\s*github\.event\.[\w.]*author_association/'
+          ...
+      - pattern-not-inside: |
+          if: '=~/github\.event_name\s*==\s*[''"]pull_request[''"]|[''"]pull_request[''"]\s*==\s*github\.event_name|github\.event_name\s*!=\s*[''"]pull_request_target[''"]|github\.event\.pull_request\.user\.login\s*==\s*[''"][\w-]+\[bot\][''"]/'
+          ...
+      - pattern-either:
+          # actions/checkout with the pull request head (or merge) ref.
+          - patterns:
+              - pattern-inside: |
+                  uses: $ACTION
+                  ...
+              - metavariable-regex:
+                  metavariable: $ACTION
+                  regex: ^['"]?actions/checkout@
+              - pattern: "ref: $REF"
+              - metavariable-regex:
+                  metavariable: $REF
+                  regex: >-
+                    (?s).*?(?:\$\{\{[^}]*?(?<![\w.])(?:github\.event\.pull_request\.head\.(?:sha|ref)|github\.event\.pull_request\.merge_commit_sha|github\.head_ref)(?![\w.])|refs/pull/\$\{\{\s*github\.event\.(?:pull_request\.)?number\s*\}\}/(?:merge|head))
+          # A run script that checks out the pull request: gh pr checkout, git pull of pull/<n>/head,
+          # or git fetch of pull/<n>/head followed by a checkout, switch, merge, rebase or hard reset.
+          - patterns:
+              - pattern: "run: $SCRIPT"
+              - metavariable-regex:
+                  metavariable: $SCRIPT
+                  regex: >-
+                    (?s).*?(?:\bgh\s+pr\s+checkout\b|\bgit\s+pull\b[^\n]*\bpull/(?:\$\{\{[^}]*\}\}|[^\s/]+)/(?:head|merge)\b|\bgit\s+fetch\b[^\n]*\bpull/(?:\$\{\{[^}]*\}\}|[^\s/]+)/(?:head|merge)\b.*?\bgit\s+(?:checkout|switch|merge|rebase|reset\s+--hard)\b)
+    metadata:
+      cwe: ["CWE-829"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+
+  - id: ethos.yaml.github-actions-permissions-write-all
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      The workflow token is granted write access to every scope (permissions: write-all), so a compromised
+      step or dependency can push code, publish releases or change settings. Grant only the scopes the job
+      needs, for example permissions: contents: read.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    pattern: "permissions: write-all"
+    metadata:
+      cwe: ["CWE-250"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      references:
+        - https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token

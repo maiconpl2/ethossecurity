@@ -1,7 +1,8 @@
 name: EthosSecurity CI
 on:
+  # Quality gate on every push to any branch, so nothing broken reaches main.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -29,6 +30,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install . semgrep==1.178.0
+      # Every starter rule must keep matching its annotated fixtures (ruleid/ok).
+      - run: semgrep --test --config src/ethossecurity/rules/semgrep tests/semgrep
       - run: ethos-sec scan . --profile bug-hunter --config examples/ci.yaml --output reports/security.json
       - uses: actions/upload-artifact@v4
         if: always()

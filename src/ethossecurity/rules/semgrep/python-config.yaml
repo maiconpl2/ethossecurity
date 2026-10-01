@@ -1,0 +1,748 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Unsafe deserialization
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.yaml-unsafe-load
+    languages: [python]
+    severity: WARNING
+    message: >-
+      PyYAML is called with an unsafe loader (or with no Loader, which is unsafe on older
+      PyYAML versions), so a crafted YAML document can build arbitrary Python objects and
+      execute code. Use yaml.safe_load(...) or yaml.load(..., Loader=yaml.SafeLoader).
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - pattern: yaml.unsafe_load(...)
+          - pattern: yaml.unsafe_load_all(...)
+          - pattern: yaml.load($DATA)
+          - pattern: yaml.load_all($DATA)
+          - patterns:
+              - pattern-either:
+                  - pattern: yaml.$LOAD($DATA, Loader=$LOADER, ...)
+                  - pattern: yaml.$LOAD($DATA, $LOADER, ...)
+              - metavariable-regex:
+                  metavariable: $LOAD
+                  regex: ^(load|load_all)$
+              - metavariable-pattern:
+                  metavariable: $LOADER
+                  pattern-either:
+                    - pattern: yaml.Loader
+                    - pattern: yaml.UnsafeLoader
+                    - pattern: yaml.CLoader
+                    - pattern: yaml.CUnsafeLoader
+      - pattern-not: yaml.$FUNC("...", ...)
+      # A local object named "yaml" (e.g. ruamel.yaml's yaml = YAML()) is not the PyYAML module.
+      - pattern-not-inside: |
+          yaml = $OBJECT(...)
+          ...
+    metadata:
+      cwe: ["CWE-502"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+
+  - id: ethos.python.unsafe-deserialization
+    languages: [python]
+    severity: WARNING
+    message: >-
+      jsonpickle.decode/loads and marshal.loads can rebuild arbitrary objects (or crash
+      the interpreter) from crafted input. Use them only on data your own code produced
+      and protected; for external input use json.loads plus explicit validation.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - pattern: jsonpickle.decode(...)
+          - pattern: jsonpickle.loads(...)
+          - pattern: jsonpickle.unpickler.decode(...)
+          - pattern: marshal.loads(...)
+      - pattern-not: jsonpickle.decode("...", ...)
+      - pattern-not: jsonpickle.loads("...", ...)
+      - pattern-not: marshal.loads("...", ...)
+    metadata:
+      cwe: ["CWE-502"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+
+  # pickle.load of local files (ML models, caches) is everywhere, so only data that comes
+  # from the HTTP request in the same file is reported.
+  - id: ethos.python.pickle-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request reaches pickle (or dill/cloudpickle) deserialization.
+      Unpickling attacker-controlled bytes runs arbitrary code on the server. Accept JSON
+      instead (json.loads plus validation), or sign the payload with hmac and check it
+      with hmac.compare_digest before loading.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    mode: taint
+    pattern-sources:
+      # Flask
+      - pattern: flask.request.$ATTR
+      # Django / Django REST framework
+      - pattern: request.body
+      - pattern: request.FILES
+      - pattern: request.POST
+      - pattern: request.GET
+      - pattern: request.COOKIES
+      - pattern: request.data
+      # FastAPI / Starlette: Request and UploadFile parameters
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async def $HANDLER(..., $REQ: Request, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $REQ: Request, ...):
+                    ...
+          - pattern-either:
+              - pattern: $REQ.body()
+              - pattern: $REQ.form()
+              - pattern: $REQ.cookies
+              - pattern: $REQ.headers
+              - pattern: $REQ.query_params
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async def $HANDLER(..., $UPLOAD: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  async def $HANDLER(..., $UPLOAD: UploadFile = $DEFAULT, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $UPLOAD: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $UPLOAD: UploadFile = $DEFAULT, ...):
+                    ...
+          - pattern-either:
+              - pattern: $UPLOAD.read()
+              - pattern: $UPLOAD.file
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: pickle.loads($DATA, ...)
+              - pattern: pickle.load($DATA, ...)
+              - pattern: pickle.Unpickler($DATA, ...)
+              - pattern: _pickle.loads($DATA, ...)
+              - pattern: cPickle.loads($DATA, ...)
+              - pattern: dill.loads($DATA, ...)
+              - pattern: dill.load($DATA, ...)
+              - pattern: cloudpickle.loads($DATA, ...)
+              - pattern: cloudpickle.load($DATA, ...)
+              - pattern: joblib.load($DATA, ...)
+              - pattern: pandas.read_pickle($DATA, ...)
+          - focus-metavariable: $DATA
+          # Payload authenticated with an HMAC before loading.
+          - pattern-not-inside: |
+              if <... hmac.compare_digest(...) ...>:
+                ...
+          - pattern-not-inside: |
+              if not hmac.compare_digest(...):
+                ...
+              ...
+    metadata:
+      cwe: ["CWE-502"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+
+  # ---------------------------------------------------------------------------
+  # TLS / certificate verification disabled
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.tls-verify-disabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      TLS certificate verification is disabled, so anyone on the network path can
+      impersonate the server and read or change the traffic (including tokens and
+      passwords). Remove verify=False / ssl=False / verify_certs=False; for an internal or
+      self-signed certificate pass the CA bundle instead (e.g. verify="/path/to/ca.pem").
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    pattern-either:
+      - pattern: requests.$METHOD(..., verify=False, ...)
+      - pattern: httpx.$METHOD(..., verify=False, ...)
+      - patterns:
+          - pattern: $CLIENT.$METHOD(..., verify=False, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|head|options|request|send|stream|Client|AsyncClient|client|resource)$
+      - patterns:
+          - pattern: $SESSION.verify = False
+          - metavariable-regex:
+              metavariable: $SESSION
+              regex: (?i).*(session|sess|client|http)$|^s$
+      - pattern: aiohttp.TCPConnector(..., ssl=False, ...)
+      - pattern: aiohttp.TCPConnector(..., verify_ssl=False, ...)
+      # aiohttp per-request flag: session.get(url, ssl=False). Only in files that import
+      # aiohttp, because ssl=False means "no TLS at all" in other client libraries.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import aiohttp
+                  ...
+              - pattern-inside: |
+                  from aiohttp import $NAME
+                  ...
+          - pattern-either:
+              - pattern: $SESSION.$METHOD(..., ssl=False, ...)
+              - pattern: $SESSION.$METHOD(..., verify_ssl=False, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|head|options|request|ws_connect)$
+      # Elasticsearch / OpenSearch clients.
+      - pattern: $CLIENT(..., verify_certs=False, ...)
+    metadata:
+      cwe: ["CWE-295"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+
+  - id: ethos.python.ssl-verification-disabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      TLS certificate or hostname verification is turned off (CERT_NONE,
+      _create_unverified_context, check_hostname=False, ssl_cert_reqs=None/"none" or
+      tlsAllowInvalidCertificates), which allows man-in-the-middle attacks. Use
+      ssl.create_default_context() and, for a private CA, load it with cafile=... (or
+      ssl_ca_certs=... / tlsCAFile=...) instead of turning verification off.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    pattern-either:
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $TARGET = ssl._create_unverified_context
+      - patterns:
+          - pattern: $CTX.verify_mode = ssl.CERT_NONE
+          # A server-side context that does not ask clients for a certificate is normal.
+          - pattern-not-inside: |
+              $CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER, ...)
+              ...
+          - pattern-not-inside: |
+              $CTX = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, ...)
+              ...
+      - patterns:
+          - pattern: $CTX.check_hostname = False
+          # Reported on the verify_mode line instead (or verify_mode is set deliberately).
+          - pattern-not-inside: |
+              $CTX.check_hostname = False
+              ...
+              $CTX.verify_mode = $MODE
+          - pattern-not: self.check_hostname = False
+      # ssl.wrap_socket / urllib3 / redis / celery options, as keyword arguments or dict keys.
+      - patterns:
+          - pattern-either:
+              - pattern: $FUNC(..., cert_reqs=$MODE, ...)
+              - pattern: $FUNC(..., ssl_cert_reqs=$MODE, ...)
+              - pattern: '{..., "cert_reqs": $MODE, ...}'
+              - pattern: '{..., "ssl_cert_reqs": $MODE, ...}'
+          - metavariable-pattern:
+              metavariable: $MODE
+              pattern-either:
+                - pattern: ssl.CERT_NONE
+                - patterns:
+                    - pattern: '"$TEXT"'
+                    - metavariable-regex:
+                        metavariable: $TEXT
+                        regex: (?i)^(cert_)?none$
+          # A server that does not request client certificates is the normal setup.
+          - pattern-not: $FUNC(..., server_side=True, ...)
+      # redis-py: ssl_cert_reqs=None also means CERT_NONE (common in Heroku examples).
+      - pattern: $FUNC(..., ssl_cert_reqs=None, ...)
+      # pymongo / motor.
+      - pattern: $FUNC(..., tlsAllowInvalidCertificates=True, ...)
+      - pattern: $FUNC(..., tlsInsecure=True, ...)
+      # The same switches inside a connection URL string (comment lines are ignored).
+      - patterns:
+          - pattern-regex: (?i)["'][^"'\n]*[?&](ssl_cert_reqs=(cert_)?none|tlsAllowInvalidCertificates=true|tlsInsecure=true)(?=[&"'])
+          - pattern-not-regex: (?m)^[ \t]*#.*$
+    metadata:
+      cwe: ["CWE-295"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+
+  # ---------------------------------------------------------------------------
+  # Debug mode
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.flask-debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      The web server is started in debug mode. In Flask/Werkzeug this enables the
+      interactive debugger, which lets anyone who can reach it run Python code on the
+      server, and it shows stack traces to visitors. Read the flag from the environment
+      and keep it off in production, e.g. debug=os.environ.get("FLASK_DEBUG") == "1".
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $APP.run(..., debug=True, ...)
+              # Plotly Dash (runs Flask/Werkzeug underneath).
+              - pattern: $APP.run_server(..., debug=True, ...)
+          - metavariable-regex:
+              metavariable: $APP
+              regex: (?i).*(app|application|socketio|sio)$
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $APP = flask.Flask(...)
+                  ...
+              - pattern-inside: |
+                  $APP = dash.Dash(...)
+                  ...
+          - pattern-either:
+              - pattern: $APP.run(..., debug=True, ...)
+              - pattern: $APP.run_server(..., debug=True, ...)
+      # app.debug = True (or app.config["DEBUG"] = True) followed by app.run() without debug=.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $APP.debug = True
+                  ...
+              - pattern-inside: |
+                  $APP.config["DEBUG"] = True
+                  ...
+          - pattern: $APP.run(...)
+          - pattern-not: $APP.run(..., debug=$DEBUG, ...)
+      - pattern: werkzeug.serving.run_simple(..., use_debugger=True, ...)
+      - pattern: werkzeug.run_simple(..., use_debugger=True, ...)
+      - pattern: werkzeug.debug.DebuggedApplication(..., evalex=True, ...)
+    metadata:
+      cwe: ["CWE-489"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+
+  - id: ethos.python.django-debug-true
+    languages: [python]
+    severity: INFO
+    message: >-
+      DEBUG = True in a Django settings module shows detailed error pages (source code,
+      settings, SQL) to visitors. Fine for local development, but make sure production
+      reads it from the environment, e.g. DEBUG = os.environ.get("DJANGO_DEBUG") == "1".
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      # Markers are spelled out (not a $NAME + regex) so that files with thousands of
+      # module-level constants do not make the sequence matching quadratic.
+      - pattern-either:
+          # Module-level Django settings (settings.py).
+          - patterns:
+              - pattern-not-inside: |
+                  def $FUNC(...):
+                    ...
+              - pattern-not-inside: |
+                  class $CLASS(...):
+                    ...
+              - pattern-either:
+                  - pattern-inside: |
+                      DEBUG = True
+                      ...
+                      ALLOWED_HOSTS = $VALUE
+                  - pattern-inside: |
+                      ALLOWED_HOSTS = $VALUE
+                      ...
+                      DEBUG = True
+                  - pattern-inside: |
+                      DEBUG = True
+                      ...
+                      INSTALLED_APPS = $VALUE
+                  - pattern-inside: |
+                      INSTALLED_APPS = $VALUE
+                      ...
+                      DEBUG = True
+                  - pattern-inside: |
+                      DEBUG = True
+                      ...
+                      ROOT_URLCONF = $VALUE
+                  - pattern-inside: |
+                      ROOT_URLCONF = $VALUE
+                      ...
+                      DEBUG = True
+              - pattern: DEBUG = True
+          # Class-based settings (django-configurations style).
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                DEBUG = True
+                ...
+                ALLOWED_HOSTS = $VALUE
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                ALLOWED_HOSTS = $VALUE
+                ...
+                DEBUG = True
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                DEBUG = True
+                ...
+                INSTALLED_APPS = $VALUE
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                INSTALLED_APPS = $VALUE
+                ...
+                DEBUG = True
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                DEBUG = True
+                ...
+                ROOT_URLCONF = $VALUE
+          - pattern-inside: |
+              class $CLASS(...):
+                ...
+                ROOT_URLCONF = $VALUE
+                ...
+                DEBUG = True
+      - pattern-not-inside: |
+          if $COND:
+            ...
+      - pattern: DEBUG = True
+    metadata:
+      cwe: ["CWE-489"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+
+  # ---------------------------------------------------------------------------
+  # JWT verification disabled
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.jwt-verification-disabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      The JWT is decoded with signature verification turned off (or the "none"
+      algorithm allowed), so a client can forge a token with any claims (user id, role).
+      Always verify: jwt.decode(token, key, algorithms=["HS256"]); use
+      jwt.get_unverified_header only to choose the key.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - pattern: jwt.$DECODE(...)
+          - pattern: jose.jwt.$DECODE(...)
+      - metavariable-regex:
+          metavariable: $DECODE
+          regex: ^(decode|decode_complete)$
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: '$F(..., options={..., "verify_signature": False, ...}, ...)'
+                  - patterns:
+                      - pattern-inside: |
+                          $OPTS = {..., "verify_signature": False, ...}
+                          ...
+                      - pattern: $F(..., options=$OPTS, ...)
+              # Two-step OIDC/JWKS flow: peek at the claims (e.g. "iss") to pick the key, then
+              # decode again WITH verification. The peek alone is not the vulnerability.
+              - pattern-not-inside: |
+                  $UNVERIFIED = $F(...)
+                  ...
+                  $VERIFIED = $JWT.$DECODE2($TOKEN, $KEY, ..., algorithms=$ALGS, ...)
+              - pattern-not-inside: |
+                  $UNVERIFIED = $F(...)
+                  ...
+                  return $JWT.$DECODE2($TOKEN, $KEY, ..., algorithms=$ALGS, ...)
+          - pattern: $F(..., verify=False, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: $F(..., algorithms=[..., $ALG, ...], ...)
+                  - pattern: $F(..., algorithms=$ALG, ...)
+              - metavariable-regex:
+                  metavariable: $ALG
+                  regex: (?i)^["']none["']$
+    metadata:
+      cwe: ["CWE-347"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+
+  # ---------------------------------------------------------------------------
+  # Hardcoded framework secret key
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.hardcoded-secret-key
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A secret signing key (framework SECRET_KEY or JWT key) is hardcoded in the source
+      code. Anyone with a copy of the code can forge session cookies, CSRF tokens or
+      signed tokens (JWTs). Load it from the environment or a secret manager (e.g.
+      os.environ["SECRET_KEY"]) and rotate the value that was committed.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - pattern: $APP.secret_key = $SECRET
+          - pattern: SECRET_KEY = $SECRET
+          - pattern: 'SECRET_KEY: $TYPE = $SECRET'
+          - pattern: JWT_SECRET_KEY = $SECRET
+          - pattern: 'JWT_SECRET_KEY: $TYPE = $SECRET'
+          - pattern: JWT_SECRET = $SECRET
+          - pattern: 'JWT_SECRET: $TYPE = $SECRET'
+          - pattern: $APP.config["SECRET_KEY"] = $SECRET
+          - pattern: $APP.config["JWT_SECRET_KEY"] = $SECRET
+          - pattern: $APP.config.update(..., SECRET_KEY=$SECRET, ...)
+          - pattern: $APP.config.update(..., JWT_SECRET_KEY=$SECRET, ...)
+          - pattern: '$APP.config.update({..., "SECRET_KEY": $SECRET, ...})'
+          - pattern: '$APP.config.update({..., "JWT_SECRET_KEY": $SECRET, ...})'
+          # Flask app factory. Not reported when a config file / env var overrides it later
+          # (the official Flask tutorial pattern: from_mapping(SECRET_KEY="dev") + from_pyfile).
+          - patterns:
+              - pattern: $APP.config.from_mapping(..., SECRET_KEY=$SECRET, ...)
+              - pattern-not-inside: |
+                  $APP.config.from_mapping(...)
+                  ...
+                  $APP.config.$LOADER(...)
+          # Signing or verifying a JWT with a literal key (PyJWT / python-jose).
+          - pattern: jwt.encode($PAYLOAD, $SECRET, ...)
+          - pattern: jwt.encode($PAYLOAD, key=$SECRET, ...)
+          - pattern: jose.jwt.encode($PAYLOAD, $SECRET, ...)
+          - pattern: jwt.decode($TOKEN, $SECRET, ..., algorithms=$ALGS, ...)
+          - pattern: jose.jwt.decode($TOKEN, $SECRET, ..., algorithms=$ALGS, ...)
+      - metavariable-pattern:
+          metavariable: $SECRET
+          pattern: '"..."'
+      # Non-empty str/bytes literal; a PEM public key or certificate is not a secret.
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: ^[bBrRuU]{0,2}("""|'''|"|')(?!\s*-----BEGIN [A-Z ]*(PUBLIC KEY|CERTIFICATE)-----)[^"']
+      - pattern-not-inside: |
+          class TestingConfig(...):
+            ...
+      - pattern-not-inside: |
+          class TestConfig(...):
+            ...
+      - pattern-not-inside: |
+          class TestSettings(...):
+            ...
+      - pattern-not-inside: |
+          class TestingSettings(...):
+            ...
+      - pattern-not-inside: |
+          class UnitTestConfig(...):
+            ...
+      - pattern-not-inside: |
+          class UnitTestSettings(...):
+            ...
+      - pattern-not-inside: |
+          class Testing(...):
+            ...
+      - pattern-not-inside: |
+          class Test(...):
+            ...
+    metadata:
+      cwe: ["CWE-798"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+
+  # ---------------------------------------------------------------------------
+  # Weak password hashing
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.weak-password-hash
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A password is hashed with a fast general-purpose hash (MD5/SHA-1/SHA-2), which can
+      be brute-forced quickly if the database leaks. Use a password hashing function:
+      argon2 (argon2-cffi), bcrypt, hashlib.scrypt / hashlib.pbkdf2_hmac with a random
+      salt, or werkzeug.security.generate_password_hash.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          # The hashed value names a password.
+          - patterns:
+              - pattern-either:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: hashlib.$HASH($ARG, ...)
+                          - pattern: hashlib.$HASH(...).update($ARG)
+                          - patterns:
+                              - pattern-inside: |
+                                  $HOBJ = hashlib.$HASH(...)
+                                  ...
+                              - pattern: $HOBJ.update($ARG)
+                      - metavariable-regex:
+                          metavariable: $HASH
+                          regex: ^(md5|sha1|sha224|sha256|sha384|sha512|sha3_224|sha3_256|sha3_384|sha3_512|blake2b|blake2s)$
+                  - pattern: hashlib.new($NAME, $ARG, ...)
+              # Re-hashing an already stored hash (e.g. a session fingerprint) is not storing a password.
+              - metavariable-regex:
+                  metavariable: $ARG
+                  regex: (?i)^(?!.*(token|reset|link|url|nonce|otp|passw(or)?d_?hash|hashed_?passw|pwd_?hash|pw_?hash))(?!\s*[bBrRuU]{0,2}["'][^"']*["']\s*$).*(passw(or)?d|passwd|(?<![a-z])pwd(?![a-z])|passphrase|senha)
+          # The result is stored under a password name (covers intermediate variables).
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: $TARGET = $RHS
+                  - pattern-inside: '$TARGET: $TYPE = $RHS'
+              - pattern-either:
+                  - patterns:
+                      - pattern: hashlib.$HASH(...)
+                      - metavariable-regex:
+                          metavariable: $HASH
+                          regex: ^(md5|sha1|sha224|sha256|sha384|sha512|sha3_224|sha3_256|sha3_384|sha3_512|blake2b|blake2s)$
+                  - pattern: hashlib.new(...)
+              - pattern-not: hashlib.$FUNC("...", ...)
+              - metavariable-regex:
+                  metavariable: $TARGET
+                  regex: (?i)^(?!.*(token|reset|link|url|nonce|otp|fingerprint|etag|cache|checksum)).*(passw(or)?d|passwd|(?<![a-z])pwd(?![a-z])|senha)
+      # Have I Been Pwned range lookups send an uppercase SHA-1 prefix, not a stored hash.
+      - pattern-not-inside: hashlib.sha1(...).hexdigest().upper()
+    metadata:
+      cwe: ["CWE-916"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+
+  # ---------------------------------------------------------------------------
+  # Insecure randomness for secrets
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.insecure-random-secret
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A security-sensitive value (token, password, OTP, API key, session id, salt) is
+      generated with the random module, whose output is predictable. Use the secrets
+      module instead, e.g. secrets.token_urlsafe(32), secrets.choice(...) or
+      f"{secrets.randbelow(10**6):06d}" for a numeric code.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: random.$RNG(...)
+              - metavariable-regex:
+                  metavariable: $RNG
+                  regex: ^(randint|randrange|getrandbits|random|randbytes)$
+          - patterns:
+              - pattern: random.choices(..., k=$K, ...)
+              - pattern-not-inside: $SEP.join(...)
+          - patterns:
+              - pattern: $SEP.join(<... random.$PICK(...) ...>)
+              - metavariable-regex:
+                  metavariable: $PICK
+                  regex: ^(choice|choices|sample)$
+      # Weighted sampling (e.g. picking the next token of a language model) never builds a secret.
+      - pattern-not-inside: random.choices(..., weights=$WEIGHTS, ...)
+      - pattern-not-inside: random.choices(..., cum_weights=$WEIGHTS, ...)
+      - pattern-not-inside: $SEP.join(<... random.choices(..., weights=$WEIGHTS, ...) ...>)
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: $NAME = $RHS
+                  - pattern-inside: '$NAME: $TYPE = $RHS'
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: (?i)^(?!.*(max|min|num|count|total|limit|len|size|ttl|expir|timeout|delay|attempt|retr|index|idx|pos|width|height|tokeni[sz]|token_?(id|ids|idx|index|type|types)\b)).*(token|passw(or)?d|passwd|\bpwd\b|senha|otp|nonce|api_?key|apikey|session_?id|sess_?id|salt|secret_?key|client_?secret|api_?secret|app_?secret|webhook_?secret|jwt_?secret|secret_?token|(reset|verification|verify|confirm|confirmation|auth|activation|access|login|invite|mfa|2fa|sms|email|pin)_?code|codigo)
+          - patterns:
+              - pattern-inside: |
+                  def $FUNC(...):
+                    ...
+              - pattern-inside: return $RET
+              - metavariable-regex:
+                  metavariable: $FUNC
+                  regex: (?i)^(?!.*(max|min|num|count|total|limit|len|size|ttl|expir|timeout|delay|attempt|retr|index|idx|pos|width|height|tokeni[sz]|token_?(id|ids|idx|index|type|types)\b)).*(token|passw(or)?d|passwd|\bpwd\b|senha|otp|nonce|api_?key|apikey|session_?id|sess_?id|salt|secret_?key|client_?secret|api_?secret|app_?secret|webhook_?secret|jwt_?secret|secret_?token|(reset|verification|verify|confirm|confirmation|auth|activation|access|login|invite|mfa|2fa|sms|email|pin)_?code|codigo)
+    metadata:
+      cwe: ["CWE-338"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+
+  # ---------------------------------------------------------------------------
+  # Insecure temporary file
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.tempfile-mktemp
+    languages: [python]
+    severity: WARNING
+    message: >-
+      tempfile.mktemp() only returns a file name; another process can create that file
+      before you open it (race condition / symlink attack). Use tempfile.mkstemp(),
+      tempfile.NamedTemporaryFile() or tempfile.TemporaryDirectory() instead.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    pattern: tempfile.mktemp(...)
+    metadata:
+      cwe: ["CWE-377"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+
+  # ---------------------------------------------------------------------------
+  # Session / auth cookies without protection flags
+  # ---------------------------------------------------------------------------
+  - id: ethos.python.insecure-auth-cookie
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A session/auth cookie is set without secure=True and/or httponly=True, so it can be
+      sent over plain HTTP or read by JavaScript injected through XSS. Pass secure=True,
+      httponly=True and samesite="Lax" (or "Strict") when setting it.
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    patterns:
+      - pattern-either:
+          - pattern: $RESP.set_cookie($NAME, $VALUE, ...)
+          - pattern: $RESP.set_cookie($NAME, ..., value=$VALUE, ...)
+          - pattern: $RESP.set_cookie(..., key=$NAME, ..., value=$VALUE, ...)
+          - pattern: $RESP.set_cookie(..., value=$VALUE, ..., key=$NAME, ...)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^(?!.*(csrf|xsrf)).*(session|sessid|auth|token|jwt|remember|refresh)
+      # Clearing the cookie on logout (value "") or a literal flag such as "1" carries no
+      # credential. f-strings and variables are still checked.
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: ^(?![bBrRuU]{0,2}("|'))
+      - pattern-not: $RESP.set_cookie(..., **$OPTIONS)
+      - pattern-not: $RESP.set_cookie(..., max_age=0, ...)
+      - pattern-not: $RESP.set_cookie(..., expires=0, ...)
+      - pattern-either:
+          - patterns:
+              - pattern: $RESP.set_cookie(...)
+              - pattern-not: $RESP.set_cookie(..., secure=$SECURE, ...)
+          - pattern: $RESP.set_cookie(..., secure=False, ...)
+          - patterns:
+              - pattern: $RESP.set_cookie(...)
+              - pattern-not: $RESP.set_cookie(..., httponly=$HTTPONLY, ...)
+          - pattern: $RESP.set_cookie(..., httponly=False, ...)
+    metadata:
+      cwe: ["CWE-614", "CWE-1004"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM

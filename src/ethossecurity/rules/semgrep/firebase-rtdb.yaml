@@ -1,0 +1,191 @@
+rules:
+  # Realtime Database security rules (database.rules.json).
+  - id: ethos.json.firebase-rtdb-public-write
+    languages: [json]
+    severity: ERROR
+    message: >-
+      This Realtime Database rule sets ".write" to true, so anyone on the internet can overwrite or delete
+      this data (and everything below it) without signing in. Use a condition such as
+      "auth != null && auth.uid === $uid" instead.
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern-inside: |
+          {"rules": ...}
+      - pattern-either:
+          - pattern: '".write": true'
+          - pattern: '".write": "true"'
+    metadata:
+      cwe: ["CWE-284", "CWE-862"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.json.firebase-rtdb-public-read-root
+    languages: [json]
+    severity: WARNING
+    message: >-
+      The root ".read" rule of this Realtime Database is true, so anyone on the internet can read the entire
+      database without signing in. Remove it and grant reads per path, keeping private data behind a condition
+      such as "auth != null && auth.uid === $uid".
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern: |
+          {"rules": {..., ".read": $VALUE, ...}}
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: ^(?:true|"\s*true\s*")$
+      - focus-metavariable: $VALUE
+    metadata:
+      cwe: ["CWE-284", "CWE-200"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.json.firebase-rtdb-public-read
+    languages: [json]
+    severity: INFO
+    message: >-
+      Anyone on the internet can read this Realtime Database path (and everything below it) without signing
+      in, because ".read" is true. That is fine for public content; make sure nothing private is stored here,
+      otherwise use a condition such as "auth != null && auth.uid === $uid".
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern-inside: |
+          {"rules": ...}
+      # The direct parent key is not "rules": root-level reads are reported by firebase-rtdb-public-read-root.
+      - pattern-inside: |
+          $PARENT: {...}
+      - metavariable-regex:
+          metavariable: $PARENT
+          regex: ^(?!["']rules["']$)
+      - pattern-either:
+          - pattern: '".read": true'
+          - pattern: '".read": "true"'
+    metadata:
+      cwe: ["CWE-200"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.json.firebase-rtdb-test-mode
+    languages: [json]
+    severity: WARNING
+    message: >-
+      These are the Firebase console "test mode" rules ("now < timestamp"): until that moment anyone on the
+      internet can read and write the database, and afterwards every request is denied. Replace them with real
+      rules that check auth before launch.
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern-inside: |
+          {"rules": ...}
+      - pattern-either:
+          - pattern: '".read": $COND'
+          - pattern: '".write": $COND'
+      - metavariable-regex:
+          metavariable: $COND
+          regex: ^["']?\s*now\s*<=?\s*\d+\s*["']?$
+    metadata:
+      cwe: ["CWE-284"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.json.firebase-rtdb-any-signed-in-user
+    languages: [json]
+    severity: WARNING
+    message: >-
+      The root ".read" or ".write" rule only checks auth != null, so every signed-in user can access the
+      entire database. Anyone can create an account in your app, so this is close to public; add rules per
+      path that compare auth.uid with the data owner.
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              {"rules": {..., ".read": $COND, ...}}
+          - pattern: |
+              {"rules": {..., ".write": $COND, ...}}
+      - metavariable-regex:
+          metavariable: $COND
+          regex: ^["']?\s*(?:auth(?:\.uid)?\s*!==?\s*null|null\s*!==?\s*auth(?:\.uid)?)\s*["']?$
+      - focus-metavariable: $COND
+    metadata:
+      cwe: ["CWE-284", "CWE-639"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  # A node keyed by a user id ("$uid", "$userId", ...) whose ".write" only checks auth != null.
+  # Root-level conditions are reported by firebase-rtdb-any-signed-in-user; reads are not reported.
+  - id: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This Realtime Database rule lets any signed-in user overwrite or delete data that belongs to another user
+      (the path is keyed by a user id), because ".write" only checks auth != null. Anyone can create an account
+      in your app; compare the key with the caller, for example ".write": "auth != null && auth.uid === $uid".
+    paths:
+      include:
+        - "*.rules.json"
+        - "*-rules.json"
+        - "rules.json"
+    patterns:
+      - pattern-inside: |
+          {"rules": ...}
+      - pattern: |
+          $KEY: {..., ".write": $COND, ...}
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i)^["']?\$(?:user|user_?id|uid|user_?uid|owner_?id|owner_?uid|account_?id|profile_?id|customer_?id|member_?id)["']?$
+      - metavariable-regex:
+          metavariable: $COND
+          regex: ^["']?\s*(?:auth(?:\.uid)?\s*!==?\s*null|null\s*!==?\s*auth(?:\.uid)?)\s*["']?$
+      - focus-metavariable: $COND
+    metadata:
+      cwe: ["CWE-639", "CWE-284"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/database/security/rules-conditions

@@ -1,0 +1,272 @@
+rules:
+  # Cloud Firestore and Cloud Storage security rules (firestore.rules, storage.rules).
+  # Each allow statement must start a line or follow "{" or ";", so commented-out examples are ignored.
+  # Matches inside /* ... */ block comments are dropped; a "/*" inside a // line comment, or right after a
+  # letter or quote (for example 'image/*' inside a string), does not open a comment.
+  - id: ethos.generic.firebase-rules-public-write
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      This Firebase security rule lets anyone on the internet modify or delete data without signing in
+      (write, update or delete with "if true" or with no condition). Require an authenticated owner, for example
+      "allow write: if request.auth != null && request.auth.uid == userId;".
+    paths:
+      include:
+        - "*.rules"
+    patterns:
+      - pattern-regex: >-
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-284", "CWE-862"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.generic.firebase-rules-public-create
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      This Firebase security rule lets anyone on the internet create documents or upload files without
+      signing in, which invites spam, data pollution and storage costs. Require sign-in or App Check and
+      validate request.resource (fields, size, content type) unless anonymous submissions are intended.
+    paths:
+      include:
+        - "*.rules"
+    patterns:
+      - pattern-regex: >-
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create)\s*,\s*)*create(?:\s*,\s*(?:read|get|list|create))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-284"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.generic.firebase-rules-public-read-wildcard
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      This Firebase security rule lets anyone on the internet read everything under a recursive "{path=**}"
+      match (usually the whole database or bucket) without signing in. Replace it with per-collection rules that
+      keep private data (emails, phone numbers, orders, tokens) behind request.auth.
+    paths:
+      include:
+        - "*.rules"
+    patterns:
+      - pattern-inside: |
+          match /{$WILDCARD=**} {
+            ...
+          }
+      - pattern-regex: >-
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-284", "CWE-200"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.generic.firebase-rules-public-read
+    languages: [generic]
+    severity: INFO
+    message: >-
+      Anyone on the internet can read the documents or files at this path without signing in ("if true" or
+      no condition). That is fine for public content; make sure nothing private (emails, phone numbers, orders,
+      tokens) is stored here, otherwise require request.auth.
+    paths:
+      include:
+        - "*.rules"
+    patterns:
+      - pattern-regex: >-
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+      - focus-metavariable: $ALLOW
+      - pattern-not-inside: |
+          match /{$WILDCARD=**} {
+            ...
+          }
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-200"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  - id: ethos.generic.firebase-rules-test-mode
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      These are the Firebase console "test mode" rules: until the date passes, anyone on the internet can
+      read and write this data, and afterwards every request is denied. Replace them with real rules that
+      check request.auth before launch.
+    paths:
+      include:
+        - "*.rules"
+    patterns:
+      - pattern-regex: >-
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+request\.time\s*<=?\s*timestamp\.date\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)[ \t]*(?=;|\}|//|\r?$))
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-284"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  # "Only signed in" conditions: request.auth != null (also request.auth.uid != null and null != request.auth),
+  # or a call to a helper function declared earlier in the same block whose whole body is
+  # "return request.auth != null;" (for example isSignedIn() or isAuthenticated()).
+  - id: ethos.generic.firebase-rules-any-signed-in-user
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      This rule gives every signed-in user access to everything under a recursive "{path=**}" match
+      (usually the whole database or bucket), guarded only by request.auth != null. Anyone can create an account
+      in your app, so this is close to public; write per-collection rules that compare request.auth.uid with the data owner.
+    paths:
+      include:
+        - "*.rules"
+    options:
+      generic_ellipsis_max_span: 5000
+    patterns:
+      - pattern-inside: |
+          match /{$WILDCARD=**} {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: >-
+              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$))
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth != null;
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth != null
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth.uid != null;
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth.uid != null
+                      }
+                      ...
+              - pattern-regex: >-
+                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$))
+              - metavariable-comparison:
+                  comparison: str($FN) == str($CALL)
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-284", "CWE-639"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/insecure-rules
+
+  # Documents keyed by a user id (match /users/{userId}, /profiles/{uid}, ...) that any signed-in user may
+  # write, update or delete. Read and create-only statements are not reported, and neither are statements
+  # inside a recursive {path=**} block (reported by firebase-rules-any-signed-in-user).
+  - id: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      This rule lets any signed-in user modify or delete documents that belong to another user (the path is
+      keyed by a user id), because it only checks request.auth != null. Anyone can create an account in your app,
+      so one user could overwrite another user's profile or role; compare the id in the path with the caller,
+      for example "allow write: if request.auth != null && request.auth.uid == userId;".
+    paths:
+      include:
+        - "*.rules"
+    options:
+      generic_ellipsis_max_span: 5000
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              match /$COLLECTION/{$USERVAR} {
+                ...
+              }
+          - pattern-inside: |
+              match /$COLLECTION/{$USERVAR}/{$REST=**} {
+                ...
+              }
+      - metavariable-regex:
+          metavariable: $USERVAR
+          regex: (?i)^(?:user|user_?id|uid|user_?uid|owner_?id|owner_?uid|account_?id|profile_?id|customer_?id|member_?id)$
+      - pattern-not-inside: |
+          match /{$WILDCARD=**} {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: >-
+              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$))
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth != null;
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth != null
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth.uid != null;
+                      }
+                      ...
+                  - pattern-inside: |
+                      function $FN() {
+                        return request.auth.uid != null
+                      }
+                      ...
+              - pattern-regex: >-
+                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$))
+              - metavariable-comparison:
+                  comparison: str($FN) == str($CALL)
+      - focus-metavariable: $ALLOW
+      - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
+    metadata:
+      cwe: ["CWE-639", "CWE-284"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://firebase.google.com/docs/rules/rules-and-auth

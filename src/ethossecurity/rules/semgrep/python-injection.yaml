@@ -1,0 +1,2227 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python injection rules.
+  #
+  # Two families share the same sinks without double-reporting:
+  #   * "*-from-request" rules (taint, ERROR): data read from a Flask, Django,
+  #     DRF, FastAPI or Starlette request reaches the sink in the same function.
+  #   * "*-dynamic" / "*-formatted" rules (WARNING): the sink receives a
+  #     non-literal value. They stay silent inside request handlers (route
+  #     decorators, a `request` parameter, or any use of flask.request), where
+  #     the taint rules decide, so one line never yields two findings.
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------- OS command
+  - id: ethos.python.os-command-dynamic
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A shell command is built from a non-literal value and run through a shell
+      (os.system, os.popen, subprocess.getoutput or
+      asyncio.create_subprocess_shell), so an untrusted part can inject extra
+      commands. Pass an argument list to subprocess.run([...]) or
+      asyncio.create_subprocess_exec(...) without a shell, or quote every value
+      with shlex.quote.
+    metadata:
+      cwe: ["CWE-78"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: os.system($CMD)
+                  - pattern: os.popen($CMD, ...)
+                  - pattern: subprocess.getoutput($CMD)
+                  - pattern: subprocess.getstatusoutput($CMD)
+                  - pattern: asyncio.create_subprocess_shell($CMD, ...)
+              - metavariable-regex:
+                  metavariable: $CMD
+                  regex: ^(?![rR]?[fF][rR]?["'])(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$)(?!sys\.executable$)
+              - pattern-not: $F("...", ...)
+              - pattern-not: $F("..." if $COND else "...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: os.system($CMD)
+                  - pattern: os.popen($CMD, ...)
+                  - pattern: subprocess.getoutput($CMD)
+                  - pattern: subprocess.getstatusoutput($CMD)
+                  - pattern: asyncio.create_subprocess_shell($CMD, ...)
+              - metavariable-pattern:
+                  metavariable: $CMD
+                  patterns:
+                    - pattern: f"...{$X}..."
+                    - metavariable-regex:
+                        metavariable: $X
+                        regex: ^(?!(?:\w+\.)*(?:[A-Z][A-Z0-9_]*|__\w+__)$|sys\.executable$|int\(|float\(|len\(|["'])
+      - pattern-not: $F(<... shlex.quote(...) ...>, ...)
+      - pattern-not: $F(<... shlex.join(...) ...>, ...)
+      - pattern-not: $F(<... pipes.quote(...) ...>, ...)
+      - pattern-not-inside: |
+          $CMD = <... shlex.quote(...) ...>
+          ...
+      - pattern-not-inside: |
+          $CMD = <... shlex.join(...) ...>
+          ...
+      # for package in REQUIRED_PACKAGES: os.system(f"pip install {package}")
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                for $ITEM in $LIST:
+                  ...
+            - metavariable-regex:
+                metavariable: $LIST
+                regex: (?s)^(?:(?:\w+\.)*[A-Z][A-Z0-9_]*|[\[(].*)$
+      # request handlers are covered by ethos.python.os-command-from-request
+      - pattern-not-inside: |
+          @$APP.route(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.get(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.post(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.put(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.patch(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.delete(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.api_route(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $REQ: Request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... flask.request ...>
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... self.request ...>
+            ...
+
+  - id: ethos.python.os-command-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request reaches a shell command (os.system, os.popen,
+      subprocess.getoutput, asyncio.create_subprocess_shell or an SSH
+      exec_command), which lets a caller run arbitrary commands on the server.
+      Pass an argument list to subprocess.run([...]) without a shell and
+      validate the value against an allowlist.
+    metadata:
+      cwe: ["CWE-78"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # conversions that drop path/command/SQL meaning, unless they wrap the sink itself
+      - patterns:
+          - pattern-either:
+              - pattern: int($ARG, ...)
+              - pattern: float($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s)^(?!.*\b(?:system|popen|getoutput|getstatusoutput|create_subprocess_shell|exec_command)\s*\()
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: shlex.quote(...)
+      - pattern: shlex.join(...)
+      - pattern: pipes.quote(...)
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      - pattern: ipaddress.ip_address(...)
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:host|domain|ip|addr|cmd|command|arg|input|name|target|branch|repo|package))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked against an anchored regular expression: re.fullmatch(r"[\w.-]+", host)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($RE, $V, ...)
+              - patterns:
+                  - pattern: re.match($RE, $V, ...)
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: (?s)^[rRbB]*["'].*(?:\$|\\Z)["']$
+              - pattern: $PAT.fullmatch($V, ...)
+              - patterns:
+                  - pattern: $PAT.match($V, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: os.system($CMD)
+              - pattern: os.popen($CMD, ...)
+              - pattern: subprocess.getoutput($CMD)
+              - pattern: subprocess.getstatusoutput($CMD)
+              - pattern: asyncio.create_subprocess_shell($CMD, ...)
+              # paramiko: the command runs in the remote user's shell
+              - pattern: $SSH.exec_command($CMD, ...)
+          - focus-metavariable: $CMD
+
+  # ------------------------------------------------------------ Code injection
+  - id: ethos.python.code-eval-dynamic
+    languages: [python]
+    severity: WARNING
+    message: >-
+      eval/exec/compile runs a non-literal string as Python code, so any
+      untrusted part executes with the program's privileges. Parse data with
+      json.loads or ast.literal_eval, or dispatch through an explicit mapping of
+      allowed operations.
+    metadata:
+      cwe: ["CWE-95"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: eval($CODE, ...)
+                  - pattern: exec($CODE, ...)
+                  - pattern: compile($CODE, $NAME, $MODE, ...)
+              - metavariable-regex:
+                  metavariable: $CODE
+                  regex: ^(?![rR]?[fF][rR]?["'])(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$)
+              - pattern-not: $F("...", ...)
+              - pattern-not: $F("..." if $COND else "...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: eval($CODE, ...)
+                  - pattern: exec($CODE, ...)
+                  - pattern: compile($CODE, $NAME, $MODE, ...)
+              - metavariable-pattern:
+                  metavariable: $CODE
+                  patterns:
+                    - pattern: f"...{$X}..."
+                    - metavariable-regex:
+                        metavariable: $X
+                        regex: ^(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$|int\(|float\(|len\(|["'])
+      # exec(compile(src, ...)) is reported once, on compile()
+      - pattern-not: $F(compile(...), ...)
+      - pattern-not-inside: |
+          $CODE = compile(...)
+          ...
+      # tree = ast.parse(expr); <check the node types>; eval(compile(tree, ...)) is the validated idiom
+      - pattern-not: compile(ast.parse(...), ...)
+      - pattern-not-inside: |
+          $CODE = ast.parse(...)
+          ...
+      # compile(..., ast.PyCF_ONLY_AST) only parses, like ast.parse()
+      - pattern-not: compile($CODE, $NAME, $MODE, ast.PyCF_ONLY_AST, ...)
+      - pattern-not: compile($CODE, $NAME, $MODE, ..., flags=ast.PyCF_ONLY_AST, ...)
+      # running a project file from disk (setup.py version loaders, config scripts)
+      - pattern-not: $F(open("...", ...).read(), ...)
+      - pattern-not: $F(compile(open("...", ...).read(), ...), ...)
+      - pattern-not: $F(pathlib.Path("...").read_text(...), ...)
+      - pattern-not-inside: |
+          with open("...", ...) as $FH:
+            ...
+            $F($FH.read(), ...)
+      # setup.py: with open(os.path.join(here, "pkg", "__version__.py")) as f: exec(f.read(), about)
+      - pattern-not: $F(open(os.path.join(...), ...).read(), ...)
+      - pattern-not-inside: |
+          with open(os.path.join(...), ...) as $FH:
+            ...
+            $F($FH.read(), ...)
+      # repr round-trip checks in tests: assert eval(repr(obj)) == obj
+      - pattern-not: eval(repr(...), ...)
+      # request handlers are covered by ethos.python.code-eval-from-request
+      - pattern-not-inside: |
+          @$APP.route(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.get(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.post(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.put(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.patch(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.delete(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          @$APP.api_route(...)
+          def $FN(...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $REQ: Request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... flask.request ...>
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... self.request ...>
+            ...
+
+  - id: ethos.python.code-eval-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request is executed as Python code with
+      eval/exec/compile, which gives a caller full remote code execution. Parse
+      the value with json.loads or ast.literal_eval, or map it to an explicit
+      allowlist of operations.
+    metadata:
+      cwe: ["CWE-95"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # conversions that drop path/command/SQL meaning, unless they wrap the sink itself
+      - patterns:
+          - pattern-either:
+              - pattern: int($ARG, ...)
+              - pattern: float($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s)^(?!.*\b(?:eval|exec|compile)\s*\()
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      # an AST is only compiled after its node types were checked (safe calculator idiom)
+      - pattern: ast.parse(...)
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:expr|formula|code|input))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked against an anchored regular expression: re.fullmatch(r"[\w.-]+", host)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($RE, $V, ...)
+              - patterns:
+                  - pattern: re.match($RE, $V, ...)
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: (?s)^[rRbB]*["'].*(?:\$|\\Z)["']$
+              - pattern: $PAT.fullmatch($V, ...)
+              - patterns:
+                  - pattern: $PAT.match($V, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($CODE, ...)
+              - pattern: exec($CODE, ...)
+              - pattern: compile($CODE, $NAME, $MODE, ...)
+          # exec(compile(src, ...)) is reported once, on compile()
+          - pattern-not: $F(compile(...), ...)
+          - pattern-not-inside: |
+              $CODE = compile(...)
+              ...
+          - focus-metavariable: $CODE
+
+  # ------------------------------------------------------------- SQL injection
+  - id: ethos.python.sql-formatted-query
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A SQL statement is assembled with an f-string, concatenation, % or
+      .format() from a non-constant value and executed without bound
+      parameters, which allows SQL injection. Use placeholders and pass the
+      values separately, e.g. cursor.execute("... WHERE id = %s", (user_id,)).
+    metadata:
+      cwe: ["CWE-89"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: $Q
+          - pattern-either:
+              - pattern: f"...{$X}..."
+              - pattern: '"..." % $X'
+              - pattern: '"...".format(..., $X, ...)'
+              - pattern: '"...".format(..., $K=$X, ...)'
+              - pattern: '"..." + $X'
+              - pattern: '$X + "..."'
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$|int\(|float\(|len\(|str\(len\(|["']|\d)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?is).*\b(select\b.*\bfrom|insert\s+into|update\b.*\bset|delete\s+from|where|values\s*\(|order\s+by|group\s+by|(create|drop|alter|truncate)\s+table|pragma|(and|or)\s+[\w.]+\s*(=|<|>|like\b|in\b))
+          # the value is spliced where SQL expects a value (= '{x}', LIKE '%{x}%', IN ({x}),
+          # VALUES ('{x}'), = %s, = " + x); identifiers such as FROM {table} are left out
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?is).*(=|<>|<|>|\blike|\bin|\bvalues|\blimit|\boffset)\s*\(?\s*['"]?%?(\{|%(\(\w+\))?[sdif]|["']\s*\+)
+      # a query kept in a variable or constant and filled in with %: cur.execute(SQL_BY_NAME % name)
+      - patterns:
+          - pattern: $T % $X
+          - metavariable-regex:
+              metavariable: $T
+              regex: (?i)^(?:\w+\.)*\w*(?:sql|query|stmt|statement)\w*$
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$|int\(|float\(|len\(|str\(len\(|["']|\d)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CUR.execute($Q)
+              - pattern: $CUR.executescript($Q)
+              - pattern: $CONN.exec_driver_sql($Q)
+              - pattern: $MODEL.objects.raw($Q)
+              - pattern: sqlalchemy.text($Q)
+              - pattern: pandas.read_sql($Q, ...)
+              - pattern: pandas.read_sql_query($Q, ...)
+              # asyncpg / databases
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DB.fetch($Q)
+                      - pattern: $DB.fetchrow($Q)
+                      - pattern: $DB.fetchval($Q)
+                      - pattern: $DB.fetch_all($Q)
+                      - pattern: $DB.fetch_one($Q)
+                      - pattern: $DB.fetch_all(query=$Q)
+                      - pattern: $DB.fetch_one(query=$Q)
+                      - pattern: $DB.execute(query=$Q)
+                  - metavariable-regex:
+                      metavariable: $DB
+                      regex: (?i)(?:cursor|conn|db|database|pool|session|engine|^(?:c|cur|con|tx)$)
+          - pattern-not: $CUR.execute(sqlalchemy.text(...))
+          - pattern-not-inside: |
+              $Q = sqlalchemy.text(...)
+              ...
+          - pattern-not: pandas.read_sql($Q, ..., params=$P, ...)
+          - pattern-not: pandas.read_sql_query($Q, ..., params=$P, ...)
+          - pattern-not-inside: $S.execute(sqlalchemy.text(...), $P, ...)
+          # request handlers are covered by ethos.python.sql-query-from-request
+          - pattern-not-inside: |
+              @$APP.route(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.get(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.post(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.put(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.patch(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.delete(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.api_route(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $REQ: Request, ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(...):
+                ...
+                <... flask.request ...>
+                ...
+          - pattern-not-inside: |
+              def $FN(...):
+                ...
+                <... self.request ...>
+                ...
+          - focus-metavariable: $Q
+
+  - id: ethos.python.sql-query-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request is embedded in the text of a SQL statement,
+      which lets a caller read or modify the whole database (SQL injection).
+      Use placeholders and pass the values as parameters, e.g.
+      cursor.execute("... WHERE name = %s", (name,)).
+    metadata:
+      cwe: ["CWE-89"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # conversions that drop path/command/SQL meaning, unless they wrap the sink itself
+      - patterns:
+          - pattern-either:
+              - pattern: int($ARG, ...)
+              - pattern: float($ARG, ...)
+              - pattern: len($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      - pattern: psycopg2.sql.Identifier(...)
+      - pattern: psycopg2.sql.Literal(...)
+      - pattern: psycopg.sql.Identifier(...)
+      - pattern: psycopg.sql.Literal(...)
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:column|col|field|sort|order|table|ident|name|input))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked against an anchored regular expression: re.fullmatch(r"[\w.-]+", host)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($RE, $V, ...)
+              - patterns:
+                  - pattern: re.match($RE, $V, ...)
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: (?s)^[rRbB]*["'].*(?:\$|\\Z)["']$
+              - pattern: $PAT.fullmatch($V, ...)
+              - patterns:
+                  - pattern: $PAT.match($V, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      # SQL text passed to a database handle (cursor, connection, session, asyncpg pool...)
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.fetch($Q, ...)
+                      - pattern: $CUR.fetchrow($Q, ...)
+                      - pattern: $CUR.fetchval($Q, ...)
+                      - pattern: $CUR.fetch_all($Q, ...)
+                      - pattern: $CUR.fetch_one($Q, ...)
+                      - pattern: $CUR.execute(..., query=$Q, ...)
+                      - pattern: $CUR.fetch_all(..., query=$Q, ...)
+                      - pattern: $CUR.fetch_one(..., query=$Q, ...)
+                  - metavariable-regex:
+                      metavariable: $CUR
+                      regex: (?i)(?:cursor|conn|db|database|pool|session|engine|sqlite|psycopg|mysql|transaction|^(?:c|cur|con|tx|txn)$)
+              # any receiver when the SQL text is written inline: client.execute(f"SELECT ...")
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.fetch($Q, ...)
+                      - pattern: $CUR.fetchrow($Q, ...)
+                      - pattern: $CUR.fetchval($Q, ...)
+                      - pattern: $CUR.fetch_all($Q, ...)
+                      - pattern: $CUR.fetch_one($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $Q
+                      regex: (?is)^[rRbBfFuU]*["'].*\b(?:select\b.*\bfrom|insert\s+into|update\b.*\bset|delete\s+from)\b
+              - pattern: $CUR.executescript($Q)
+              - pattern: $CONN.exec_driver_sql($Q, ...)
+              - pattern: $MODEL.objects.raw($Q, ...)
+              - pattern: sqlalchemy.text($Q)
+              - pattern: pandas.read_sql($Q, ...)
+              - pattern: pandas.read_sql_query($Q, ...)
+          - pattern-not: $CUR.execute(sqlalchemy.text(...), ...)
+          - pattern-not-inside: |
+              $Q = sqlalchemy.text(...)
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-either:
+              - pattern: '$QS.extra(..., where=[..., $Q, ...], ...)'
+              - pattern: '$QS.extra(..., select={..., $K: $Q, ...}, ...)'
+          - focus-metavariable: $Q
+
+  # ------------------------------------------------------------ Path traversal
+  - id: ethos.python.path-traversal-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A file path built from HTTP request data is opened, served or written
+      without normalization, so "../" sequences or absolute paths can reach any
+      file on the server. Reduce the name with werkzeug's secure_filename or
+      os.path.basename, or serve from a fixed folder with send_from_directory.
+    metadata:
+      cwe: ["CWE-22"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # conversions that drop path/command/SQL meaning, unless they wrap the sink itself
+      - patterns:
+          - pattern-either:
+              - pattern: int($ARG, ...)
+              - pattern: float($ARG, ...)
+              - pattern: io.BytesIO($ARG, ...)
+              - pattern: io.StringIO($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s)^(?!.*\b(?:open|send_file|FileResponse|remove|unlink|rmtree|read_text|read_bytes|write_text|write_bytes|save)\s*\()
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: werkzeug.utils.secure_filename(...)
+      - pattern: werkzeug.secure_filename(...)
+      - pattern: werkzeug.security.safe_join(...)
+      - pattern: flask.safe_join(...)
+      - pattern: os.path.basename(...)
+      - pattern: os.path.splitext(...)[1]
+      - pattern: pathlib.Path(...).suffix
+      - pattern: pathlib.Path(...).name
+      - pattern: pathlib.PurePath(...).name
+      - pattern: uuid.UUID(...)
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      # containment checks: once the value is tested, treat it as validated
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V.startswith(...)
+              - pattern: $V.is_relative_to(...)
+              - pattern: $V.relative_to(...)
+              - pattern: os.path.commonpath([..., $V, ...])
+              - pattern: '".." in $V'
+          - focus-metavariable: $V
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:path|file|name|dir|folder))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked against an anchored regular expression: re.fullmatch(r"[\w.-]+", host)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($RE, $V, ...)
+              - patterns:
+                  - pattern: re.match($RE, $V, ...)
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: (?s)^[rRbB]*["'].*(?:\$|\\Z)["']$
+              - pattern: $PAT.fullmatch($V, ...)
+              - patterns:
+                  - pattern: $PAT.match($V, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: open($PATH, ...)
+              - pattern: io.open($PATH, ...)
+              - pattern: codecs.open($PATH, ...)
+              - pattern: aiofiles.open($PATH, ...)
+              - pattern: flask.send_file($PATH, ...)
+              - pattern: starlette.responses.FileResponse($PATH, ...)
+              - pattern: fastapi.responses.FileResponse($PATH, ...)
+              - pattern: os.remove($PATH, ...)
+              - pattern: os.unlink($PATH, ...)
+              - pattern: shutil.rmtree($PATH, ...)
+              - pattern: $PATH.read_text(...)
+              - pattern: $PATH.read_bytes(...)
+              - pattern: $PATH.write_text(...)
+              - pattern: $PATH.write_bytes(...)
+              - pattern: $PATH.unlink(...)
+              # pathlib open: (UPLOAD_DIR / name).open("rb"), Path(name).open(), dest_path.open("wb")
+              - patterns:
+                  - pattern: $PATH.open(...)
+                  - metavariable-pattern:
+                      metavariable: $PATH
+                      pattern-either:
+                        - pattern: $BASE / $NAME
+                        - pattern: pathlib.Path(...)
+              - patterns:
+                  - pattern: $PATH.open(...)
+                  - metavariable-regex:
+                      metavariable: $PATH
+                      regex: (?i)^\w*(?:path|dest|destination|target|location)\w*$
+              # werkzeug FileStorage.save(dst) and PIL Image.save(fp, "PNG"); Django
+              # Storage.save(name, content) and FieldFile.save(name, content) validate the name
+              - patterns:
+                  - pattern: $UPLOAD.save($PATH, ...)
+                  - pattern-not: $UPLOAD.save($PATH, $CONTENT, ...)
+                  - metavariable-regex:
+                      metavariable: $UPLOAD
+                      regex: (?i)^(?!.*storage)
+              - pattern: $UPLOAD.save($PATH, "...", ...)
+          - focus-metavariable: $PATH
+
+  # ---------------------------------------------------------------------- SSRF
+  - id: ethos.python.ssrf-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      The server sends an HTTP request to a URL controlled by HTTP request
+      data, which lets a caller reach internal services or cloud metadata
+      endpoints (SSRF). Keep the scheme and host fixed in code and only insert
+      escaped path or query values, or check the parsed host against an
+      allowlist.
+    metadata:
+      cwe: ["CWE-918"]
+      owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # conversions that drop path/command/SQL meaning, unless they wrap the sink itself
+      - patterns:
+          - pattern-either:
+              - pattern: int($ARG, ...)
+              - pattern: float($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s)^(?!.*\b(?:(?:requests|httpx|aiohttp)\.\w+|urlopen|Request)\s*\()
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      - pattern: urllib.parse.quote(...)
+      - pattern: urllib.parse.quote_plus(...)
+      - pattern: urllib.parse.urlencode(...)
+      # URL whose scheme and host are fixed in code: only the path or query varies
+      - patterns:
+          - pattern: $URL
+          - pattern-either:
+              - pattern: f"..."
+              - pattern: '"..." + $Y'
+              - pattern: '"..." % $Y'
+              - pattern: '"...".format(...)'
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^[rR]?[fF]?[rR]?["'][a-zA-Z][a-zA-Z0-9+.-]*://[^/"'{}%]+/
+      # URL that starts with a constant or configured base (BASE_URL, settings.API_URL, self.base_url)
+      - patterns:
+          - pattern: $URL
+          - pattern-either:
+              - pattern: f"..."
+              - pattern: $B + $Y
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^(?:[rR]?[fF][rR]?["']\{)?(?:(?:(?:self|cls|\w*settings|\w*config|conf)\.)*(?:[A-Z][A-Z0-9_]*|\w*(?:base_url|api_url|endpoint)\w*)|os\.(?:getenv|environ)[^}+]*|(?:current_app|app)\.config\[[^\]]+\])(?:\}/|\s*\+)
+      # host checked after parsing: urlparse(url).hostname in ALLOWED_HOSTS
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: urllib.parse.urlparse($V, ...)
+              - pattern: urllib.parse.urlsplit($V, ...)
+              - pattern: django.utils.http.url_has_allowed_host_and_scheme($V, ...)
+          - focus-metavariable: $V
+      # prefix check that pins scheme and host: url.startswith("https://partner.example.com/");
+      # a scheme-only check such as url.startswith(("http://", "https://")) is not a defense
+      - by-side-effect: true
+        patterns:
+          - pattern: $V.startswith($PREFIX, ...)
+          - metavariable-regex:
+              metavariable: $PREFIX
+              regex: (?i)^(?:\(\s*)?(?:[ru]?["'][a-z][a-z0-9+.-]*://[^/"'{}]+/|(?:\w+\.)*(?!\w*(?:scheme|protocol))\w*(?:url|host|prefix|origin|domain)\w*$)
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:url|uri|host|domain|link|endpoint|webhook|callback|addr))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: requests.$METHOD($URL, ...)
+                      - pattern: httpx.$METHOD($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(get|post|put|patch|delete|head|options|stream)$
+              - patterns:
+                  - pattern-either:
+                      - pattern: requests.$METHOD(..., url=$URL, ...)
+                      - pattern: httpx.$METHOD(..., url=$URL, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(get|post|put|patch|delete|head|options|stream|request)$
+              - pattern: requests.request($VERB, $URL, ...)
+              - pattern: httpx.request($VERB, $URL, ...)
+              - pattern: aiohttp.request($VERB, $URL, ...)
+              - patterns:
+                  - pattern: urllib.request.urlopen($URL, ...)
+                  # urlopen(Request(url)) is reported once, on Request()
+                  - pattern-not: urllib.request.urlopen(urllib.request.Request(...), ...)
+                  - pattern-not-inside: |
+                      $URL = urllib.request.Request(...)
+                      ...
+              - pattern: urllib.request.Request($URL, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          with requests.Session(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.Client(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.AsyncClient(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with aiohttp.ClientSession(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          $C = requests.Session(...)
+                          ...
+                      - pattern-inside: |
+                          $C = httpx.Client(...)
+                          ...
+                      - pattern-inside: |
+                          $C = httpx.AsyncClient(...)
+                          ...
+                      - pattern-inside: |
+                          $C = aiohttp.ClientSession(...)
+                          ...
+                  - pattern-either:
+                      - pattern: $C.$METHOD($URL, ...)
+                      - pattern: $C.$METHOD(..., url=$URL, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(get|post|put|patch|delete|head|options|stream)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          with requests.Session(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.Client(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with httpx.AsyncClient(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          with aiohttp.ClientSession(...) as $C:
+                            ...
+                      - pattern-inside: |
+                          $C = requests.Session(...)
+                          ...
+                      - pattern-inside: |
+                          $C = httpx.Client(...)
+                          ...
+                      - pattern-inside: |
+                          $C = httpx.AsyncClient(...)
+                          ...
+                      - pattern-inside: |
+                          $C = aiohttp.ClientSession(...)
+                          ...
+                  - pattern: $C.request($VERB, $URL, ...)
+          - focus-metavariable: $URL
+
+  # ----------------------------------------------- Server-side template injection
+  - id: ethos.python.template-injection-dynamic
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A Jinja2/Mako template source is assembled with an f-string,
+      concatenation, % or .format() from a non-constant value; if that value
+      contains template syntax it is executed on the server (SSTI). Keep the
+      template constant and pass values as render variables, e.g.
+      render_template_string(TEMPLATE, name=name).
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: f"...{$X}..."
+              - pattern: '"..." % $X'
+              - pattern: '"...".format(..., $X, ...)'
+              - pattern: '"...".format(..., $K=$X, ...)'
+              - pattern: '"..." + $X'
+              - pattern: '$X + "..."'
+              - pattern: $S.replace($OLD, $X)
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$|int\(|float\(|len\(|["']|\d)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: flask.render_template_string($TPL, ...)
+              - pattern: jinja2.Template($TPL, ...)
+              - pattern: mako.template.Template($TPL, ...)
+              # Environment.from_string(); a SandboxedEnvironment is the safe way to render user templates
+              - patterns:
+                  - pattern: $ENV.from_string($TPL, ...)
+                  - metavariable-regex:
+                      metavariable: $ENV
+                      regex: (?i)(?:env|jinja|template|tpl|engine)
+                  - metavariable-regex:
+                      metavariable: $ENV
+                      regex: (?i)^(?!.*sandbox)
+                  - pattern-not-inside: |
+                      $ENV = jinja2.sandbox.SandboxedEnvironment(...)
+                      ...
+                  - pattern-not-inside: |
+                      $ENV = jinja2.sandbox.ImmutableSandboxedEnvironment(...)
+                      ...
+          # request handlers are covered by ethos.python.template-injection-from-request
+          - pattern-not-inside: |
+              @$APP.route(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.get(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.post(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.put(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.patch(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.delete(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              @$APP.api_route(...)
+              def $FN(...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $REQ: Request, ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(...):
+                ...
+                <... flask.request ...>
+                ...
+          - pattern-not-inside: |
+              def $FN(...):
+                ...
+                <... self.request ...>
+                ...
+          - focus-metavariable: $TPL
+
+  - id: ethos.python.template-injection-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request becomes part of a Jinja2/Mako template source,
+      so a caller can send template syntax such as {{ ... }} that runs code on
+      the server (SSTI). Keep the template constant and pass the value as a
+      render variable, e.g. render_template_string(TEMPLATE, name=name).
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.json
+          - pattern: flask.request.files
+          - pattern: flask.request.data
+          - pattern: flask.request.cookies
+          - pattern: flask.request.headers
+          - pattern: flask.request.view_args
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.get_data(...)
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.FILES
+              - pattern: $R.COOKIES
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., request, ...):
+                ...
+          - pattern-either:
+              - pattern: request.data
+              - pattern: request.body
+      # FastAPI / Starlette `Request` parameter
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.json()
+              - pattern: $R.form()
+              - pattern: $R.body()
+              - pattern: $R.headers
+              - pattern: $R.cookies
+      # FastAPI uploaded file name
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $FN(..., $P: UploadFile = $D, ...):
+                    ...
+          - pattern: $P.filename
+      # Flask view arguments with a string/path converter: @app.route("/f/<path:name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          # values injected by FastAPI dependencies (current user, settings) are not request input
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+      # FastAPI URL/path-typed parameters and request body models: def create(item: ItemIn) -> item.field
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FN(..., $P: $T, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?!(?:Request|Response|WebSocket|UploadFile|BackgroundTasks|Session|AsyncSession|HTTPConnection|SecurityScopes)$)[A-Z]\w*$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $T
+                      regex: ^(?:HttpUrl|AnyUrl|AnyHttpUrl|Path|PurePath)$
+                  - pattern: $P
+              - pattern: $P.$ATTR
+    pattern-sanitizers:
+      # records loaded from the database by a request id are not request data
+      - patterns:
+          - pattern-either:
+              - pattern: $Q.first(...)
+              - pattern: $Q.one(...)
+              - pattern: $Q.one_or_none(...)
+              - pattern: $Q.scalar(...)
+              - pattern: $Q.scalar_one(...)
+              - pattern: $Q.scalar_one_or_none(...)
+              - pattern: $Q.first_or_404(...)
+              - pattern: $Q.get_or_404(...)
+              - pattern: $Q.fetchone()
+              - pattern: $Q.fetchall()
+          # not when the query itself is built here: cur.execute(f"...").fetchall()
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?!.*\b(?:execute|executemany|executescript|exec_driver_sql|raw|extra|text|read_sql|read_sql_query)\s*\()
+      - pattern-either:
+          - pattern: $MODEL.query.get(...)
+          - pattern: $MODEL.objects.get(...)
+          - pattern: $MODEL.objects.filter(...)
+          - pattern: django.shortcuts.get_object_or_404(...)
+      - patterns:
+          - pattern: $SESSION.get($MODEL, ...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: ^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$
+      # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
+      - patterns:
+          - pattern-either:
+              - pattern: $MAP[...]
+              - pattern: $MAP.get(...)
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*$
+      # membership test against a constant allowlist: if name not in ALLOWED: abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $V in $ALLOWED
+              - pattern: $V not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: (?s)^(?:(?!.*\b(?:request|req)\.)(?:\w+\.)*(?!(?:GET|POST|FILES|COOKIES|META)$)[A-Z][A-Z0-9_]*|[\[({].*)$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      - pattern: int(...)
+      - pattern: float(...)
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      # value checked by a validation helper: if not is_safe_url(url): abort(400)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VALIDATE(..., $V, ...)
+          - metavariable-regex:
+              metavariable: $VALIDATE
+              regex: (?i)^(?:\w+\.)*(?=\w*(?:safe|valid|allowed|trusted|whitelist|allowlist|permitted|within))(?=\w*(?:template|tpl|input|name))\w+$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+      # value checked against an anchored regular expression: re.fullmatch(r"[\w.-]+", host)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($RE, $V, ...)
+              - patterns:
+                  - pattern: re.match($RE, $V, ...)
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: (?s)^[rRbB]*["'].*(?:\$|\\Z)["']$
+              - pattern: $PAT.fullmatch($V, ...)
+              - patterns:
+                  - pattern: $PAT.match($V, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^\w+$
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: flask.render_template_string($TPL, ...)
+              - pattern: jinja2.Template($TPL, ...)
+              - pattern: mako.template.Template($TPL, ...)
+              # Environment.from_string(); a SandboxedEnvironment is the safe way to render user templates
+              - patterns:
+                  - pattern: $ENV.from_string($TPL, ...)
+                  - metavariable-regex:
+                      metavariable: $ENV
+                      regex: (?i)(?:env|jinja|template|tpl|engine)
+                  - metavariable-regex:
+                      metavariable: $ENV
+                      regex: (?i)^(?!.*sandbox)
+                  - pattern-not-inside: |
+                      $ENV = jinja2.sandbox.SandboxedEnvironment(...)
+                      ...
+                  - pattern-not-inside: |
+                      $ENV = jinja2.sandbox.ImmutableSandboxedEnvironment(...)
+                      ...
+          - focus-metavariable: $TPL
+
+  # ---------------------------------------------------- XSS: escaping disabled
+  - id: ethos.python.markup-unescaped-dynamic
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A non-literal value is wrapped in Markup()/mark_safe(), which turns off
+      HTML autoescaping, so any user-controlled part becomes cross-site
+      scripting. Let the template escape the value, or build the HTML with
+      Markup("...").format(...) / format_html() so the inserted values are
+      escaped.
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: markupsafe.Markup($HTML)
+                  - pattern: flask.Markup($HTML)
+                  - pattern: jinja2.Markup($HTML)
+                  - pattern: django.utils.safestring.mark_safe($HTML)
+                  - pattern: django.utils.safestring.SafeString($HTML)
+              - metavariable-regex:
+                  metavariable: $HTML
+                  regex: ^(?![rR]?[fF][rR]?["'])(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$)
+              - pattern-not: $F("...")
+              - pattern-not: $F("..." if $COND else "...")
+          - patterns:
+              - pattern-either:
+                  - pattern: markupsafe.Markup($HTML)
+                  - pattern: flask.Markup($HTML)
+                  - pattern: jinja2.Markup($HTML)
+                  - pattern: django.utils.safestring.mark_safe($HTML)
+                  - pattern: django.utils.safestring.SafeString($HTML)
+              - metavariable-pattern:
+                  metavariable: $HTML
+                  patterns:
+                    - pattern: f"...{$X}..."
+                    - metavariable-regex:
+                        metavariable: $X
+                        regex: ^(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$|int\(|float\(|len\(|["'])
+      # values that were already escaped, sanitized or rendered by a template
+      - pattern-not: $F(<... markupsafe.escape(...) ...>)
+      - pattern-not: $F(<... html.escape(...) ...>)
+      - pattern-not: $F(<... django.utils.html.escape(...) ...>)
+      - pattern-not: $F(<... django.utils.html.format_html(...) ...>)
+      - pattern-not: $F(<... django.utils.html.format_html_join(...) ...>)
+      - pattern-not: $F(<... bleach.clean(...) ...>)
+      - pattern-not: $F(<... nh3.clean(...) ...>)
+      - pattern-not: $F(<... flask.render_template(...) ...>)
+      - pattern-not: $F(<... django.template.loader.render_to_string(...) ...>)

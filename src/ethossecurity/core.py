@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import yaml
 from jsonschema.exceptions import ValidationError
-from .findings import normalize, SEVERITIES
+from .findings import normalize, relative, SEVERITIES
 
 PROFILES = {'bug-hunter': ['semgrep', 'codeql'], 'app-security': ['semgrep', 'codeql', 'zap'],
             'infra-security': ['trivy', 'gitleaks', 'osv'],
@@ -46,14 +46,19 @@ def config(path=None, root=None, trust_project=True):
     return result
 
 def command(scanner, root, cfg, output):
-    rules = str(Path(__file__).parent / 'rules/default.yaml')
+    rules = str(Path(__file__).parent / 'rules/semgrep')
     if scanner == 'semgrep':
-        return ['semgrep', 'scan', '--config', rules, '--metrics=off', '--exclude', '.ethossecurity', '--json', '--output', str(output), str(root)], {0}
+        # Semgrep matches --exclude against paths relative to the enclosing git root: a .ethossecurity folder between
+        # that root and the project would exclude the whole project, so pin the root there (.gitignore is then not honored).
+        git = next((p for p in (root, *root.parents) if (p / '.git').exists()), None)
+        anchor = ['--project-root', str(root)] if git and '.ethossecurity' in root.relative_to(git).parts else []
+        return ['semgrep', 'scan', '--config', rules, '--metrics=off', *anchor, '--exclude', '.ethossecurity', '--json', '--output', str(output), str(root)], {0}
     if scanner == 'trivy':
         # Vulnerability data is not project-specific: one shared cache, never written into the scanned project.
         return ['trivy', '--cache-dir', str(GLOBAL_HOME / 'cache/trivy'), 'fs', '--scanners', 'vuln,misconfig', '--skip-dirs', str(root / '.ethossecurity'), '--format', 'json', '--output', str(output), str(root)], {0}
     if scanner == 'gitleaks':
-        return ['gitleaks', 'dir', str(root), '--config', str(Path(__file__).parent / 'rules/gitleaks.toml'), '--redact=100', '--report-format', 'json', '--report-path', str(output)], {0, 1}
+        # '.' is the project (scan runs with cwd=root): project-relative paths let gitleaks.toml anchor its allowlist.
+        return ['gitleaks', 'dir', '.', '--config', str(Path(__file__).parent / 'rules/gitleaks.toml'), '--redact=100', '--report-format', 'json', '--report-path', str(output)], {0, 1}
     if scanner == 'osv':
         return ['osv-scanner', 'scan', 'source', '-r', str(root), '--experimental-exclude', '.ethossecurity',
                 '--no-resolve', '--no-call-analysis', 'go', '--no-call-analysis', 'rust', '--allow-no-lockfiles',
@@ -98,17 +103,22 @@ def scan(root, profile='full-scan', cfg=None):
                 environment = dict(os.environ)
                 environment.pop('PYTHONPATH', None)
                 environment.pop('PYTHONHOME', None)
+                # Semgrep's Python CLI otherwise writes its JSON report in the Windows ANSI code page ("Gestão" breaks UTF-8).
+                environment['PYTHONUTF8'] = '1'
                 run = subprocess.run(argv, cwd=root, shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, timeout=cfg['timeout_seconds'], env=environment)
                 record['exit_code'] = run.returncode
                 if run.returncode not in accepted:
                     raise ValueError('Scanner failed; exit code ' + str(run.returncode))
                 data = json.loads(output.read_text(encoding='utf-8-sig'))
-                found = normalize(scanner, data)
+                found = normalize(scanner, data, root)
                 findings.extend(found)
                 partial = scanner == 'semgrep' and bool(data.get('errors'))
                 record.update(status='partial' if partial else 'completed', reason='Scanner reported analysis errors' if partial else None,
                               finding_count=len(found))
+                if partial:
+                    # Name the files left unanalyzed (e.g. invalid YAML) so the gap is actionable, not just reported.
+                    record['unanalyzed_files'] = sorted({relative(e['path'], root) for e in data['errors'] if isinstance(e, dict) and e.get('path')})
             except subprocess.TimeoutExpired:
                 record.update(status='timeout', reason='Execution deadline exceeded')
             except (OSError, ValueError, KeyError, TypeError, AttributeError, ValidationError) as error:

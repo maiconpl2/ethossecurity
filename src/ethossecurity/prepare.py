@@ -11,6 +11,7 @@ import urllib.request
 import venv
 import zipfile
 from pathlib import Path
+from . import __version__
 
 ASSETS = Path(__file__).parent / 'assets'
 
@@ -50,7 +51,7 @@ def platform_key():
 def download(url, path, expected_hash):
     if not url.startswith('https://github.com/'):
         raise ValueError('Only pinned HTTPS publisher release assets are allowed')
-    request = urllib.request.Request(url, headers={'User-Agent': 'EthosSecurity/0.2'})
+    request = urllib.request.Request(url, headers={'User-Agent': 'EthosSecurity/' + __version__})
     digest, size = hashlib.sha256(), 0
     with urllib.request.urlopen(request, timeout=60) as response, path.open('xb') as stream:
         while block := response.read(1024 * 1024):

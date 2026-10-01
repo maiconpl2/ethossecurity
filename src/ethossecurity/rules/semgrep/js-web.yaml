@@ -1,0 +1,1444 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # DOM XSS: attacker-controlled data (decoded URL parameters, window.name,
+  # unchecked postMessage payloads) reaching an HTML sink.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.dom-xss-untrusted-source
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Data an attacker controls (a URL query or route parameter, a decoded URL fragment, window.name or an
+      unchecked postMessage payload) is inserted as HTML, which enables DOM-based cross-site scripting. Render it
+      as text (textContent, React {value}) or sanitize it with DOMPurify.sanitize() before inserting it as HTML.
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    # lookup[userValue] selects existing data rather than copying the value, so it does not propagate.
+    options:
+      taint_assume_safe_indexes: true
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $URL.searchParams
+          - pattern: useSearchParams()
+          - pattern: useParams()
+          - pattern: window.name
+      # Next.js Pages Router: only router.query carries URL values (router.pathname is the route pattern).
+      - patterns:
+          - pattern-inside: |
+              $ROUTER = useRouter();
+              ...
+          - pattern: $ROUTER.query
+      - patterns:
+          - pattern-inside: |
+              const {..., query, ...} = useRouter();
+              ...
+          - pattern: query
+      - pattern: useRouter().query
+      # URLSearchParams built from literals/objects (request bodies, links) and decoding of literals are not
+      # attacker-controlled.
+      - patterns:
+          - pattern-either:
+              - pattern: new URLSearchParams(...)
+              - pattern: decodeURIComponent(...)
+              - pattern: decodeURI(...)
+          - pattern-not: new URLSearchParams()
+          - pattern-not: new URLSearchParams({...})
+          - pattern-not: new URLSearchParams("...")
+          - pattern-not: decodeURIComponent("...")
+          - pattern-not: decodeURI("...")
+          # UTF-8/base64 idioms (decodeURIComponent(escape(atob(b64))), JWT payload decoding) decode API data.
+          - pattern-not: decodeURIComponent(escape(...))
+          - pattern-not: decodeURIComponent(<... atob(...) ...>)
+          - pattern-not: decodeURIComponent(<... $W.atob(...) ...>)
+      # const { searchParams } = new URL(location.href)
+      - patterns:
+          - pattern-inside: |
+              const {..., searchParams, ...} = new URL(...);
+              ...
+          - pattern: searchParams
+      # Next.js App Router pages receive the query string as the searchParams prop.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $PAGE({..., searchParams, ...}) {...}
+              - pattern-inside: 'function $PAGE({..., searchParams, ...}: $PROPS) {...}'
+          - pattern: searchParams
+      # window.addEventListener("message", ({ data }) => ...) without destructuring origin.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: window.addEventListener("message", ({..., data, ...}) => {...}, ...)
+              - pattern-inside: window.addEventListener("message", function ({..., data, ...}) {...}, ...)
+          - pattern-not-inside: window.addEventListener("message", ({..., origin, ...}) => {...}, ...)
+          - pattern-not-inside: window.addEventListener("message", function ({..., origin, ...}) {...}, ...)
+          - pattern-not-inside: window.addEventListener("message", ({..., source, ...}) => {...}, ...)
+          - pattern: data
+      - patterns:
+          - pattern-either:
+              - pattern-inside: window.addEventListener("message", ($E) => {...}, ...)
+              - pattern-inside: window.addEventListener("message", function ($E) {...}, ...)
+              - pattern-inside: window.onmessage = ($E) => {...}
+              - pattern-inside: window.onmessage = function ($E) {...}
+              - pattern-inside: |
+                  const $H = ($E) => {...};
+                  ...
+                  window.addEventListener("message", $H, ...);
+              - pattern-inside: |
+                  function $H($E) {...}
+                  ...
+                  window.addEventListener("message", $H, ...);
+          - pattern-not-inside: ($E) => { ... <... $E.origin ...>; ... }
+          - pattern-not-inside: function ($E) { ... <... $E.origin ...>; ... }
+          - pattern-not-inside: function $H($E) { ... <... $E.origin ...>; ... }
+          - pattern-not-inside: ($E) => { ... <... $E.source ...>; ... }
+          - pattern-not-inside: function $H($E) { ... <... $E.source ...>; ... }
+          - pattern-not-inside: ($E) => { ... const {origin} = $E; ... }
+          - pattern: $E.data
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(...)
+              - pattern: $OBJ.$FN(...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: '(?i)(?!unescape$).*(?:saniti[sz]e|purify|escape|encode|xss|parseint|parsefloat)'
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: Boolean(...)
+          - pattern: $X.length
+      # Inline HTML escaping: value.replace(/</g, "&lt;")... or value.replace(/[&<>"']/g, (c) => map[c]).
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($PAT, $ENTITY)
+              - pattern: $X.replaceAll($PAT, $ENTITY)
+          - metavariable-regex:
+              metavariable: $ENTITY
+              regex: '^["''`]&(?:lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);["''`]$'
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($PAT, $FN)
+              - pattern: $X.replaceAll($PAT, $FN)
+          - metavariable-regex:
+              metavariable: $PAT
+              regex: '^/\[[^\]]*<[^\]]*\]/[a-z]*$'
+      # Data-fetching calls return server data, not the URL value used to build the request.
+      - pattern-either:
+          - pattern: fetch(...)
+          - pattern: axios(...)
+          - pattern: axios.$VERB(...)
+          - pattern: useQuery(...)
+          - pattern: useSuspenseQuery(...)
+          - pattern: useInfiniteQuery(...)
+          - pattern: useSWR(...)
+          - pattern: useFetch(...)
+      # Other function/method calls end the flow: their result is new data (API, database, lookup), not the
+      # raw value. Only string/URL helpers keep propagating.
+      - patterns:
+          - pattern: $CALLEE(...)
+          # Calls that take a callback (useEffect, addEventListener, then, forEach...) are not boundaries:
+          # a sanitizer range would also hide every sink inside the callback.
+          - pattern-not: $CALLEE(..., (...) => {...}, ...)
+          - pattern-not: $CALLEE(..., function (...) {...}, ...)
+          - metavariable-regex:
+              metavariable: $CALLEE
+              regex: '(?=[\w$]+$)(?!(?:decodeURIComponent|decodeURI|unescape|String|atob|useSearchParams|useParams|useRouter|URL|URLSearchParams|\$|jQuery)$)'
+      - patterns:
+          - pattern: $RECEIVER.$METHOD(...)
+          - pattern-not: $RECEIVER.$METHOD(..., (...) => {...}, ...)
+          - pattern-not: $RECEIVER.$METHOD(..., function (...) {...}, ...)
+          # toString is not listed: params.toString() serializes percent-encoded. Object.fromEntries(params)
+          # keeps the decoded values.
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: '(?!(?:slice|substring|substr|trim|trimStart|trimEnd|toLowerCase|toUpperCase|toLocaleLowerCase|toLocaleUpperCase|split|join|concat|replace|replaceAll|padStart|padEnd|at|charAt|normalize|repeat|get|getAll|valueOf|parse|stringify|map|filter|find|flat|flatMap|reverse|sort|values|entries|fromEntries|reduce|insertAdjacentHTML|write|writeln|createContextualFragment|html|append|prepend|before|after|replaceWith|useParams|useSearchParams|useRouter|decodeURIComponent|decodeURI|marked|makeHtml)$)'
+      - patterns:
+          - pattern: $CLIENT.get(...)
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: '(?i)[\w$]*(?:axios|api|http|client|fetcher|instance|service|ky|got|superagent)[\w$]*$'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $SINK
+              - pattern: $EL.outerHTML = $SINK
+              - pattern: $EL.innerHTML += $SINK
+              - pattern: $EL.outerHTML += $SINK
+              - pattern: $EL.srcdoc = $SINK
+              - pattern: $EL.insertAdjacentHTML($POS, $SINK)
+              - pattern: document.write(..., $SINK, ...)
+              - pattern: document.writeln(..., $SINK, ...)
+              - pattern: $RANGE.createContextualFragment($SINK)
+              - pattern: '{__html: $SINK}'
+          - focus-metavariable: $SINK
+      - patterns:
+          - pattern-either:
+              - pattern: $(...).$JQ($SINK)
+              - pattern: jQuery(...).$JQ($SINK)
+          - metavariable-regex:
+              metavariable: $JQ
+              regex: ^(?:html|append|prepend|before|after|replaceWith)$
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------
+  # DOM XSS (review): HTML assembled from unescaped values written to a sink.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.dom-xss-unescaped-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      HTML built from unescaped values (template or string interpolation, raw URL parts, API fields such as
+      name/content/message, or unsanitized Markdown output) is written to innerHTML, insertAdjacentHTML,
+      document.write or a jQuery HTML method; if any value can come from users or an API this is cross-site
+      scripting. Use textContent/createElement for text, or escape each value or sanitize the final HTML with
+      DOMPurify.sanitize().
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    # lookup[userValue] selects existing data rather than copying the value, so it does not propagate.
+    options:
+      taint_assume_safe_indexes: true
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: '`...${$I}...`'
+              - pattern: '"..." + $I'
+              - pattern: '$I + "..."'
+              - pattern: '$Q + "..." + $I'
+          # Skip interpolations that are obviously not attacker-controlled HTML: nested templates or callbacks
+          # (checked on their own), escaping/sanitizing/translation calls, literals, numbers, dates, lengths,
+          # ids/counters, timer/game/weather numbers and boolean flags, CONSTANTS, icon/svg helpers, values named
+          # escaped/sanitized/safe, comparisons, literal-only ternaries, arithmetic, data-* attributes, serialized
+          # URLSearchParams, and URL-derived values (reported by ethos.js.dom-xss-untrusted-source instead).
+          - metavariable-regex:
+              metavariable: $I
+              regex: '(?!.*(?:`|=>|\bfunction\b|&(?:lt|gt|amp|quot|#)|\.get\s*\(|decodeURI|\.searchParams|window\.name|\.dataset\.|\.getAttribute\s*\())(?!\s*[\w$.]*(?i:escape|saniti[sz]|encode|purify|xss|safe|clean)[\w$]*\s*\()(?!\s*(?:t|i18n\.t|\$t|intl\.formatMessage)\s*\()(?!\s*(?:-?\d|["'']|(?:true|false|null|undefined)\s*$))(?!.*\.(?:length|size)\s*$)(?!.*\.(?:toFixed|toPrecision|toLocaleString|toLocaleDateString|toLocaleTimeString|toDateString|toTimeString|toISOString|toUTCString|getTime|getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds)\s*\()(?!\s*(?:Number|parseInt|parseFloat|Math\.\w+|Date\.now|new\s+Date|new\s+Intl|Intl\.\w+|dayjs|moment)\b)(?!.*\.format\s*\([^()]*\)\s*$)(?!\s*[\w$.]*(?i:format(?:ted)?_?(?:date|time|currency|price|number|bytes|duration|money|percent|size|amount))\w*\s*\()(?!\s*[A-Z][A-Z0-9_]*(?:\.[\w$]+|\[[^\]]*\])*\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?i:icons?|svgs?|emojis?)[\w$]*(?:\.[\w$]+|\[[^\]]*\]|\([^()]*\))?\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?<![Uu]n)(?i:escaped|sanitized|safe|clean|purified)[\w$]*\s*$)(?![^?]*\s(?:===?|!==?|[<>]=?)\s[^?]*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?:Id|ID|Count|Index|Idx|Total|Length|Size|Price|Amount|Percent|Pct|Qty|Quantity|Width|Height|Year|Age|Score|Level|Step|Page|Rating|Duration|Ms|Px|Num|Number|Class|ClassName|Icon|Color|Colour|Seconds|Minutes|Hours|Days|Lives|Moves|Points|Attempts|Wins|Losses|Streak|Round|Turn|Progress|Ratio|Temp|Temperature|Speed|Distance|Elapsed|Remaining|Left)|id|idx|index|count|total|length|size|price|amount|percent|pct|qty|quantity|width|height|year|age|score|level|step|page|rating|duration|num|number|i|j|k|n|x|y|className|cls|icon|color|colour|_id|seconds|secs|minutes|mins|hours|hrs|days|ms|elapsed|remaining|lives|moves|points|attempts|tries|wins|losses|streak|round|turn|health|hp|coins|progress|ratio|temp|temperature|humidity|speed|distance|lat|lng|lon|latitude|longitude|zoom|min|max|avg|sum|percentage|(?:is|has|should|can)[A-Z][\w$]*|enabled|disabled|visible|checked|selected|active|loading)\s*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?i:params)|qs|queryString)(?:\.toString\(\))?\s*$)(?![^?]*\?\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*:\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*\)?\s*$)(?!\s*[\w$.]+\s*[-*/%]\s*[\w$.]+\s*$)(?!\s*[\w$.]+\s*\+\s*\d+\s*$)'
+          - pattern-not-inside: |
+              $I = <... $P.get(...) ...>;
+              ...
+          - pattern-not-inside: |
+              $I = <... decodeURIComponent(...) ...>;
+              ...
+          - pattern-not-inside: |
+              $I = <... decodeURI(...) ...>;
+              ...
+          # Booleans such as params.has("debug") cannot carry markup; a URLSearchParams object serializes
+          # percent-encoded.
+          - pattern-not-inside: |
+              $I = $P.has(...);
+              ...
+          - pattern-not-inside: |
+              $I = new URLSearchParams(...);
+              ...
+          # A variable that is itself HTML assembled in this scope (concatenation, template, joined map, ternary,
+          # literal) is not a new source: its own parts are checked where it is built and taint flows from there.
+          - pattern-not-inside: |
+              $I = $LEFT + $RIGHT;
+              ...
+          - pattern-not-inside: |
+              $I = `...`;
+              ...
+          - pattern-not-inside: |
+              $I = $ARR.map(...).join(...);
+              ...
+          - pattern-not-inside: |
+              $I = $COND ? $THEN : $ELSE;
+              ...
+          - pattern-not-inside: |
+              $I = "...";
+              ...
+          # data-* attributes of the page's own markup (el.getAttribute("data-suffix"), el.dataset.label).
+          - pattern-not-inside: |
+              $I = <... $EL.getAttribute(...) ...>;
+              ...
+          - pattern-not-inside: |
+              $I = <... $EL.dataset.$ATTR ...>;
+              ...
+          # Values escaped inline before use: const text = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;")...
+          - pattern-not-inside: |
+              $I = <... $X.replace($PAT, "&lt;") ...>;
+              ...
+          - pattern-not-inside: |
+              $I = <... $X.replaceAll($PAT, "&lt;") ...>;
+              ...
+          # Inside postMessage handlers the payload is reported by ethos.js.dom-xss-untrusted-source (or is
+          # trusted after an origin check), so it is not reported again here.
+          - pattern-not-inside: window.addEventListener("message", ...)
+          - pattern-not-inside: window.onmessage = $HANDLER
+          - pattern-not-inside: |
+              const $MSGHANDLER = ($MSGEVENT) => {...};
+              ...
+              window.addEventListener("message", $MSGHANDLER, ...);
+      # Same check inside callbacks that build HTML: items.map((x) => `<li>${x.name}</li>`) / reduce(...)
+      # and items.forEach((x) => { html += `<li>${x.name}</li>`; }) followed by a sink using html.
+      - patterns:
+          - pattern-either:
+              - pattern: $ARR.map($CALLBACK)
+              - pattern: $ARR.reduce($CALLBACK, ...)
+          # Static data in a CONSTANT array (NAV_ITEMS.map(...), PROFESSIONS.slice(0, 6).map(...)) is author content.
+          - metavariable-regex:
+              metavariable: $ARR
+              regex: '(?![A-Z][A-Z0-9_]*(?:[.\[(]|$))'
+          - metavariable-pattern:
+              metavariable: $CALLBACK
+              patterns:
+                - pattern-either:
+                    - pattern: '`...${$I}...`'
+                    - pattern: '"..." + $I'
+                    - pattern: '$I + "..."'
+                    - pattern: '$Q + "..." + $I'
+                - metavariable-regex:
+                    metavariable: $I
+                    regex: '(?!.*(?:`|=>|\bfunction\b|&(?:lt|gt|amp|quot|#)|\.get\s*\(|decodeURI|\.searchParams|window\.name|\.dataset\.|\.getAttribute\s*\())(?!\s*[\w$.]*(?i:escape|saniti[sz]|encode|purify|xss|safe|clean)[\w$]*\s*\()(?!\s*(?:t|i18n\.t|\$t|intl\.formatMessage)\s*\()(?!\s*(?:-?\d|["'']|(?:true|false|null|undefined)\s*$))(?!.*\.(?:length|size)\s*$)(?!.*\.(?:toFixed|toPrecision|toLocaleString|toLocaleDateString|toLocaleTimeString|toDateString|toTimeString|toISOString|toUTCString|getTime|getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds)\s*\()(?!\s*(?:Number|parseInt|parseFloat|Math\.\w+|Date\.now|new\s+Date|new\s+Intl|Intl\.\w+|dayjs|moment)\b)(?!.*\.format\s*\([^()]*\)\s*$)(?!\s*[\w$.]*(?i:format(?:ted)?_?(?:date|time|currency|price|number|bytes|duration|money|percent|size|amount))\w*\s*\()(?!\s*[A-Z][A-Z0-9_]*(?:\.[\w$]+|\[[^\]]*\])*\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?i:icons?|svgs?|emojis?)[\w$]*(?:\.[\w$]+|\[[^\]]*\]|\([^()]*\))?\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?<![Uu]n)(?i:escaped|sanitized|safe|clean|purified)[\w$]*\s*$)(?![^?]*\s(?:===?|!==?|[<>]=?)\s[^?]*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?:Id|ID|Count|Index|Idx|Total|Length|Size|Price|Amount|Percent|Pct|Qty|Quantity|Width|Height|Year|Age|Score|Level|Step|Page|Rating|Duration|Ms|Px|Num|Number|Class|ClassName|Icon|Color|Colour|Seconds|Minutes|Hours|Days|Lives|Moves|Points|Attempts|Wins|Losses|Streak|Round|Turn|Progress|Ratio|Temp|Temperature|Speed|Distance|Elapsed|Remaining|Left)|id|idx|index|count|total|length|size|price|amount|percent|pct|qty|quantity|width|height|year|age|score|level|step|page|rating|duration|num|number|i|j|k|n|x|y|className|cls|icon|color|colour|_id|seconds|secs|minutes|mins|hours|hrs|days|ms|elapsed|remaining|lives|moves|points|attempts|tries|wins|losses|streak|round|turn|health|hp|coins|progress|ratio|temp|temperature|humidity|speed|distance|lat|lng|lon|latitude|longitude|zoom|min|max|avg|sum|percentage|(?:is|has|should|can)[A-Z][\w$]*|enabled|disabled|visible|checked|selected|active|loading)\s*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?i:params)|qs|queryString)(?:\.toString\(\))?\s*$)(?![^?]*\?\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*:\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*\)?\s*$)(?!\s*[\w$.]+\s*[-*/%]\s*[\w$.]+\s*$)(?!\s*[\w$.]+\s*\+\s*\d+\s*$)'
+      - patterns:
+          - pattern-inside: |
+              $ARR.forEach(($ITEM) => { ... $ACC += $PIECE; ... });
+              ...
+          - pattern: $ACC
+          - metavariable-regex:
+              metavariable: $ARR
+              regex: '(?![A-Z][A-Z0-9_]*(?:[.\[(]|$))'
+          - metavariable-pattern:
+              metavariable: $PIECE
+              patterns:
+                - pattern-either:
+                    - pattern: '`...${$I}...`'
+                    - pattern: '"..." + $I'
+                    - pattern: '$I + "..."'
+                    - pattern: '$Q + "..." + $I'
+                - metavariable-regex:
+                    metavariable: $I
+                    regex: '(?!.*(?:`|=>|\bfunction\b|&(?:lt|gt|amp|quot|#)|\.get\s*\(|decodeURI|\.searchParams|window\.name|\.dataset\.|\.getAttribute\s*\())(?!\s*[\w$.]*(?i:escape|saniti[sz]|encode|purify|xss|safe|clean)[\w$]*\s*\()(?!\s*(?:t|i18n\.t|\$t|intl\.formatMessage)\s*\()(?!\s*(?:-?\d|["'']|(?:true|false|null|undefined)\s*$))(?!.*\.(?:length|size)\s*$)(?!.*\.(?:toFixed|toPrecision|toLocaleString|toLocaleDateString|toLocaleTimeString|toDateString|toTimeString|toISOString|toUTCString|getTime|getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds)\s*\()(?!\s*(?:Number|parseInt|parseFloat|Math\.\w+|Date\.now|new\s+Date|new\s+Intl|Intl\.\w+|dayjs|moment)\b)(?!.*\.format\s*\([^()]*\)\s*$)(?!\s*[\w$.]*(?i:format(?:ted)?_?(?:date|time|currency|price|number|bytes|duration|money|percent|size|amount))\w*\s*\()(?!\s*[A-Z][A-Z0-9_]*(?:\.[\w$]+|\[[^\]]*\])*\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?i:icons?|svgs?|emojis?)[\w$]*(?:\.[\w$]+|\[[^\]]*\]|\([^()]*\))?\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?<![Uu]n)(?i:escaped|sanitized|safe|clean|purified)[\w$]*\s*$)(?![^?]*\s(?:===?|!==?|[<>]=?)\s[^?]*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?:Id|ID|Count|Index|Idx|Total|Length|Size|Price|Amount|Percent|Pct|Qty|Quantity|Width|Height|Year|Age|Score|Level|Step|Page|Rating|Duration|Ms|Px|Num|Number|Class|ClassName|Icon|Color|Colour|Seconds|Minutes|Hours|Days|Lives|Moves|Points|Attempts|Wins|Losses|Streak|Round|Turn|Progress|Ratio|Temp|Temperature|Speed|Distance|Elapsed|Remaining|Left)|id|idx|index|count|total|length|size|price|amount|percent|pct|qty|quantity|width|height|year|age|score|level|step|page|rating|duration|num|number|i|j|k|n|x|y|className|cls|icon|color|colour|_id|seconds|secs|minutes|mins|hours|hrs|days|ms|elapsed|remaining|lives|moves|points|attempts|tries|wins|losses|streak|round|turn|health|hp|coins|progress|ratio|temp|temperature|humidity|speed|distance|lat|lng|lon|latitude|longitude|zoom|min|max|avg|sum|percentage|(?:is|has|should|can)[A-Z][\w$]*|enabled|disabled|visible|checked|selected|active|loading)\s*$)(?!\s*(?:[\w$]+\.)*(?:[\w$]*(?i:params)|qs|queryString)(?:\.toString\(\))?\s*$)(?![^?]*\?\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*:\s*(?:"[^"]*"|''[^'']*''|-?\d[\d.]*)\s*\)?\s*$)(?!\s*[\w$.]+\s*[-*/%]\s*[\w$.]+\s*$)(?!\s*[\w$.]+\s*\+\s*\d+\s*$)'
+      - patterns:
+          - pattern: $OBJ.$PROP
+          - pattern-not: window.name
+          - metavariable-regex:
+              metavariable: $PROP
+              regex: ^(?:content|body|html|htmlContent|description|message|msg|text|comment|bio|title|name|username|displayName|markup|summary|excerpt|caption|note|notes|details)$
+          # err.message / error.message from a caught exception is not user HTML.
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?!(?:e|err|error|ex|exception|[\w$]*Error)$)'
+          # Inside postMessage handlers the payload is reported by ethos.js.dom-xss-untrusted-source (or is
+          # trusted after an origin check), so it is not reported again here.
+          - pattern-not-inside: window.addEventListener("message", ...)
+          - pattern-not-inside: window.onmessage = $HANDLER
+          - pattern-not-inside: |
+              const $MSGHANDLER = ($MSGEVENT) => {...};
+              ...
+              window.addEventListener("message", $MSGHANDLER, ...);
+      - patterns:
+          - pattern-either:
+              - pattern: location.$P
+              - pattern: window.location.$P
+              - pattern: document.location.$P
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^(?:hash|search|href|pathname)$
+      - pattern-either:
+          - pattern: document.URL
+          - pattern: document.documentURI
+          - pattern: document.referrer
+          - pattern: marked(...)
+          - pattern: marked.parse(...)
+          - pattern: $CONVERTER.makeHtml(...)
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(...)
+              - pattern: $OBJ.$FN(...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: '(?i)(?!unescape$).*(?:saniti[sz]e|purify|escape|encode|xss|parseint|parsefloat)'
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: Boolean(...)
+          - pattern: $X.length
+          # Decoded URL values are reported by ethos.js.dom-xss-untrusted-source; do not report them twice.
+          - pattern: decodeURIComponent(...)
+          - pattern: decodeURI(...)
+          - pattern: new URLSearchParams(...)
+          - pattern: $URL.searchParams
+      - patterns:
+          - pattern-inside: |
+              const {..., searchParams, ...} = new URL(...);
+              ...
+          - pattern: searchParams
+      # Data-fetching calls return server data, not the URL value used to build the request.
+      - pattern-either:
+          - pattern: fetch(...)
+          - pattern: axios(...)
+          - pattern: axios.$VERB(...)
+          - pattern: useQuery(...)
+          - pattern: useSuspenseQuery(...)
+          - pattern: useInfiniteQuery(...)
+          - pattern: useSWR(...)
+          - pattern: useFetch(...)
+      # Other function/method calls end the flow: their result is new data (API, database, lookup), not the
+      # raw value. Only string/URL helpers keep propagating.
+      - patterns:
+          - pattern: $CALLEE(...)
+          # Calls that take a callback (useEffect, addEventListener, then, forEach...) are not boundaries:
+          # a sanitizer range would also hide every sink inside the callback.
+          - pattern-not: $CALLEE(..., (...) => {...}, ...)
+          - pattern-not: $CALLEE(..., function (...) {...}, ...)
+          - metavariable-regex:
+              metavariable: $CALLEE
+              regex: '(?=[\w$]+$)(?!(?:String|atob|marked|URL|URLSearchParams|\$|jQuery)$)'
+      - patterns:
+          - pattern: $RECEIVER.$METHOD(...)
+          - pattern-not: $RECEIVER.$METHOD(..., (...) => {...}, ...)
+          - pattern-not: $RECEIVER.$METHOD(..., function (...) {...}, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: '(?!(?:slice|substring|substr|trim|trimStart|trimEnd|toLowerCase|toUpperCase|toLocaleLowerCase|toLocaleUpperCase|split|join|concat|replace|replaceAll|padStart|padEnd|at|charAt|normalize|repeat|get|getAll|toString|valueOf|parse|stringify|map|filter|find|flat|flatMap|reverse|sort|values|entries|reduce|insertAdjacentHTML|write|writeln|createContextualFragment|html|append|prepend|before|after|replaceWith|useParams|useSearchParams|useRouter|decodeURIComponent|decodeURI|marked|makeHtml)$)'
+      - patterns:
+          - pattern: $CLIENT.get(...)
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: '(?i)[\w$]*(?:axios|api|http|client|fetcher|instance|service|ky|got|superagent)[\w$]*$'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $SINK
+              - pattern: $EL.outerHTML = $SINK
+              - pattern: $EL.innerHTML += $SINK
+              - pattern: $EL.outerHTML += $SINK
+              - pattern: $EL.srcdoc = $SINK
+              - pattern: $EL.insertAdjacentHTML($POS, $SINK)
+              - pattern: document.write(..., $SINK, ...)
+              - pattern: document.writeln(..., $SINK, ...)
+              - pattern: $RANGE.createContextualFragment($SINK)
+          - focus-metavariable: $SINK
+      - patterns:
+          - pattern-either:
+              - pattern: $(...).$JQ($SINK)
+              - pattern: jQuery(...).$JQ($SINK)
+          - metavariable-regex:
+              metavariable: $JQ
+              regex: ^(?:html|append|prepend|before|after|replaceWith)$
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------
+  # Reflected XSS: request values written into an HTML response by the server.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.reflected-xss-from-request
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A value from the request URL (query string or route parameter) is written into an HTML response without
+      escaping, so a crafted link can run JavaScript in the visitor's browser (reflected cross-site scripting).
+      Escape it first (for example with the escape-html package), render it with a template engine or JSX that
+      escapes by default, or return JSON (res.json / c.json).
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    options:
+      taint_assume_safe_indexes: true
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    mode: taint
+    # Form/JSON bodies are not sources: a JSON API cannot be posted cross-site, so only URL values are reported.
+    pattern-sources:
+      # Express / Next.js API routes / Koa.
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.request.query
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(?:req|request|ctx|context)$
+      # Hono: c.req.query("q") / c.req.param("id").
+      - pattern-either:
+          - pattern: $C.req.query(...)
+          - pattern: $C.req.queries(...)
+          - pattern: $C.req.param(...)
+      # Cloudflare Workers / Node http / Next.js route handlers: new URL(request.url).searchParams.
+      - patterns:
+          - pattern-either:
+              - pattern: new URL(<... $REQ.url ...>, ...).searchParams
+              - patterns:
+                  - pattern-inside: |
+                      $U = new URL(<... $REQ.url ...>, ...);
+                      ...
+                  - pattern: $U.searchParams
+              - patterns:
+                  - pattern-inside: |
+                      const {..., searchParams, ...} = new URL(<... $REQ.url ...>, ...);
+                      ...
+                  - pattern: searchParams
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(?:req|request)$
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(...)
+              - pattern: $OBJ.$FN(...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: '(?i)(?!unescape$).*(?:saniti[sz]e|purify|escape|encode|xss|parseint|parsefloat)'
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: Boolean(...)
+          - pattern: $X.length
+          # Hono's html`...` tagged template escapes interpolated values.
+          - pattern: html`...`
+      # An allowlist or pattern check on the value (ALLOWED.includes(tab), /^[\w-]+$/.test(slug)).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes(<... $X ...>)
+              - pattern: $LIST.has(<... $X ...>)
+              - pattern: $RE.test(<... $X ...>)
+          - metavariable-regex:
+              metavariable: $X
+              regex: '^[\w$]+(?:\.[\w$]+)*$'
+          - focus-metavariable: $X
+      # Other function/method calls end the flow: their result is new data (database, lookup, rendering helper),
+      # not the raw value. Only string helpers keep propagating.
+      - patterns:
+          - pattern: $CALLEE(...)
+          - pattern-not: $CALLEE(..., (...) => {...}, ...)
+          - pattern-not: $CALLEE(..., function (...) {...}, ...)
+          - metavariable-regex:
+              metavariable: $CALLEE
+              regex: '(?=[\w$]+$)(?!(?:decodeURIComponent|decodeURI|unescape|String|atob)$)'
+      - patterns:
+          - pattern: $RECEIVER.$METHOD(...)
+          - pattern-not: $RECEIVER.$METHOD(..., (...) => {...}, ...)
+          - pattern-not: $RECEIVER.$METHOD(..., function (...) {...}, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: '(?!(?:slice|substring|substr|trim|trimStart|trimEnd|toLowerCase|toUpperCase|toLocaleLowerCase|toLocaleUpperCase|split|join|concat|replace|replaceAll|padStart|padEnd|at|charAt|normalize|repeat|get|getAll|valueOf|map|filter|find|flat|flatMap|reverse|sort|values|entries|reduce|query|queries|param|send|end|write|html|includes|has|test)$)'
+    pattern-sinks:
+      # Express res.send(string) is served as text/html.
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($SINK)
+              - pattern: $RES.status($CODE).send($SINK)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(?:res|response)$
+          # Objects/arrays are sent as JSON; an explicit non-HTML Content-Type is not rendered as HTML.
+          - pattern-not: $RES.send({...})
+          - pattern-not: $RES.send([...])
+          - pattern-not: $RES.status($CODE).send({...})
+          - pattern-not: $RES.status($CODE).send([...])
+          - pattern-not: $RES.send($R.query)
+          - pattern-not: $RES.send($R.params)
+          - pattern-not-inside: $R2.type($T).send(...)
+          - pattern-not-inside: $R2.status($S).type($T).send(...)
+          - pattern-not-inside: $R2.contentType($T).send(...)
+          - pattern-not-inside: |
+              $R3.$SETCT("Content-Type", "=~/^(?!.*html)/");
+              ...
+          - pattern-not-inside: |
+              $R3.$SETCT("content-type", "=~/^(?!.*html)/");
+              ...
+          - pattern-not-inside: |
+              $R3.type("=~/^(?!.*html)/");
+              ...
+          # Early return after validating a request field in place: if (!/^[a-z0-9-]+$/.test(req.params.slug)) return ...
+          - pattern-not-inside: |
+              if (<... $RE.test($RQ.$SRC.$FIELD) ...>) return ...;
+              ...
+          - pattern-not-inside: |
+              if (<... $RE.test($RQ.$SRC.$FIELD) ...>) { ... return ...; }
+              ...
+          - pattern-not-inside: |
+              if (<... $LIST.includes($RQ.$SRC.$FIELD) ...>) return ...;
+              ...
+          - pattern-not-inside: |
+              if (<... $LIST.includes($RQ.$SRC.$FIELD) ...>) { ... return ...; }
+              ...
+          - focus-metavariable: $SINK
+      # Explicit HTML responses: res.type("text/html").send(...) (Express) / reply.type("text/html").send(...)
+      # (Fastify).
+      - patterns:
+          - pattern: $R.type("=~/html/i").send($SINK)
+          - focus-metavariable: $SINK
+      # Node http: res.write/res.end after declaring text/html.
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.end($SINK, ...)
+              - pattern: $RES.write($SINK, ...)
+          - pattern-either:
+              - pattern-inside: |
+                  $RES.writeHead($CODE, {..., $K: "=~/text\/html/i", ...});
+                  ...
+              - pattern-inside: |
+                  $RES.setHeader($K, "=~/text\/html/i");
+                  ...
+          - focus-metavariable: $SINK
+      # Workers / Next.js route handlers: new Response(html, { headers: { "Content-Type": "text/html" } }).
+      - patterns:
+          - pattern-either:
+              - pattern: 'new Response($SINK, {..., headers: {..., $K: $CT, ...}, ...})'
+              - pattern: 'new NextResponse($SINK, {..., headers: {..., $K: $CT, ...}, ...})'
+          - metavariable-regex:
+              metavariable: $CT
+              regex: '(?i)^["''`]text/html'
+          - focus-metavariable: $SINK
+      # Hono c.html(string); JSX elements and the html`...` tag escape their values.
+      - patterns:
+          - pattern: $C.html($SINK)
+          - metavariable-regex:
+              metavariable: $C
+              regex: ^(?:c|ctx|context)$
+          - pattern-not: $C.html(<$EL>...</$EL>)
+          - pattern-not: $C.html(<$EL ...>...</$EL>)
+          - focus-metavariable: $SINK
+      # Koa: a string body that starts with "<" is served as text/html.
+      - patterns:
+          - pattern: $CTX.body = $SINK
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: ^(?:ctx|context)$
+          - metavariable-regex:
+              metavariable: $SINK
+              regex: '^[`"'']\s*<'
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------
+  # React dangerouslySetInnerHTML with a value that is not sanitized.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.react-dangerously-set-inner-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      dangerouslySetInnerHTML renders this value as raw HTML; if it can contain user, CMS or API data (including
+      Markdown converted to HTML) it enables cross-site scripting. Render text with {value} instead, or pass the
+      HTML through DOMPurify.sanitize() (or sanitize-html) first.
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    patterns:
+      - pattern: '{__html: $X}'
+      - pattern-not: '{__html: "..."}'
+      # Not flagged: sanitizer/escape calls, JSON.stringify (JSON-LD), translation helpers, values whose name says
+      # they are already sanitized/static (sanitized, clean, safe, svg, icon, highlighted), CONSTANTS and
+      # literal-only ternaries.
+      - metavariable-regex:
+          metavariable: $X
+          regex: '(?!\s*[\w$.]*(?i:saniti[sz]|purify|escape|xss)[\w$]*\s*\()(?!\s*JSON\.stringify\s*\()(?!\s*(?:t|i18n\.t|\$t|intl\.formatMessage)\s*\()(?!\s*(?:[\w$]+\.)*[\w$]*(?<![Uu]n)(?i:saniti[sz]|purif|clean|safe|escaped|trusted|svg|icon|highlight)[\w$]*\s*$)(?!\s*[A-Z][A-Z0-9_]*(?:\.[\w$]+|\[[^\]]*\])*\s*$)(?!\s*(?:[\w$]+\.)*[\w$]*(?i:icons?|svgs?|emojis?)(?:\.[\w$]+|\[[^\]]*\])?\s*$)(?![^?]*\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')\s*$)'
+      - pattern-not-inside: |
+          $X = <... $PURIFIER.sanitize(...) ...>;
+          ...
+      - pattern-not-inside: |
+          $X = <... sanitize(...) ...>;
+          ...
+      - pattern-not-inside: |
+          $X = <... sanitizeHtml(...) ...>;
+          ...
+      - pattern-not-inside: |
+          $X = <... JSON.stringify(...) ...>;
+          ...
+      - focus-metavariable: $X
+
+  # ---------------------------------------------------------------------------
+  # postMessage to another window with targetOrigin "*".
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.postmessage-wildcard-origin
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      postMessage() sends what looks like a token, session or user data with targetOrigin "*", so any site that is
+      loaded in (or navigates) that window can read it. Pass the exact origin you expect, e.g.
+      "https://app.example.com" or window.location.origin.
+    metadata:
+      cwe: ["CWE-201"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: $WIN.postMessage($MSG, "*", ...)
+          - pattern: '$WIN.postMessage($MSG, {..., targetOrigin: "*", ...})'
+      # Posting to the current window/worker itself does not leak data to another origin.
+      - pattern-not: window.postMessage(...)
+      - pattern-not: self.postMessage(...)
+      - pattern-not: globalThis.postMessage(...)
+      # Messages that carry no data are harmless: a string literal ("ready") or an object literal (optionally in
+      # JSON.stringify, e.g. YouTube player commands) with only literal values plus iframe size fields
+      # ({ type: "resize", height: document.body.scrollHeight }).
+      - metavariable-regex:
+          metavariable: $MSG
+          regex: '(?!\s*(?:"[^"]*"|''[^'']*''|`[^`$]*`)\s*$)(?!\s*(?:JSON\.stringify\(\s*\{\s*(?:(?:[\w$]+|"[^"]*"|''[^'']*'')\s*:\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)|\[\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)\s*,?\s*)*\])|(?:height|width|scrollHeight|offsetHeight|clientHeight)(?:\s*:\s*[\w$.()]+)?)(?:\s*,\s*(?:(?:[\w$]+|"[^"]*"|''[^'']*'')\s*:\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)|\[\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)\s*,?\s*)*\])|(?:height|width|scrollHeight|offsetHeight|clientHeight)(?:\s*:\s*[\w$.()]+)?))*\s*,?\s*\}\s*\)|\{\s*(?:(?:[\w$]+|"[^"]*"|''[^'']*'')\s*:\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)|\[\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)\s*,?\s*)*\])|(?:height|width|scrollHeight|offsetHeight|clientHeight)(?:\s*:\s*[\w$.()]+)?)(?:\s*,\s*(?:(?:[\w$]+|"[^"]*"|''[^'']*'')\s*:\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)|\[\s*(?:(?:"[^"]*"|''[^'']*''|-?[\d.]+|true|false|null)\s*,?\s*)*\])|(?:height|width|scrollHeight|offsetHeight|clientHeight)(?:\s*:\s*[\w$.()]+)?))*\s*,?\s*\})\s*$)'
+      # Only report messages that visibly carry credentials or personal data (token, session, user, email, code...),
+      # inline or in the variable posted; generic UI/state messages to an embedding page are too noisy to report.
+      - pattern-either:
+          - patterns:
+              - pattern: $WIN.postMessage($MSG, ...)
+              - metavariable-regex:
+                  metavariable: $MSG
+                  regex: '(?is).*(?:token|jwt|auth|session|secret|passw|credential|api_?key|cookie|user|e-?mail|account|profile|(?<![\w$])code(?![\w$]))'
+          - patterns:
+              - pattern-inside: |
+                  $MSG = $INIT;
+                  ...
+              - pattern: $WIN.postMessage($MSG, ...)
+              - metavariable-regex:
+                  metavariable: $INIT
+                  regex: '(?is).*(?:token|jwt|auth|session|secret|passw|credential|api_?key|cookie|user|e-?mail|account|profile|(?<![\w$])code(?![\w$]))'
+
+  # ---------------------------------------------------------------------------
+  # message event handlers that use event.data without checking event.origin.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.message-listener-no-origin-check
+    languages: [javascript, typescript]
+    severity: INFO
+    message: >-
+      This "message" event handler uses event.data without checking event.origin (or event.source), so any page
+      that can reference this window can send it commands or data. Return early unless event.origin is one of the
+      origins you trust.
+    metadata:
+      cwe: ["CWE-346"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              window.addEventListener("message", ($E) => { ... <... $E.data ...>; ... }, ...)
+          - pattern: |
+              window.addEventListener("message", function ($E) { ... <... $E.data ...>; ... }, ...)
+          - pattern: |
+              window.onmessage = ($E) => { ... <... $E.data ...>; ... }
+          - pattern: |
+              window.onmessage = function ($E) { ... <... $E.data ...>; ... }
+          # ({ data }) => ... destructures the payload but not origin/source.
+          - patterns:
+              - pattern-either:
+                  - pattern: window.addEventListener("message", ({..., data, ...}) => {...}, ...)
+                  - pattern: window.addEventListener("message", function ({..., data, ...}) {...}, ...)
+              - pattern-not: window.addEventListener("message", ({..., origin, ...}) => {...}, ...)
+              - pattern-not: window.addEventListener("message", function ({..., origin, ...}) {...}, ...)
+              - pattern-not: window.addEventListener("message", ({..., source, ...}) => {...}, ...)
+              - pattern-not: window.addEventListener("message", function ({..., source, ...}) {...}, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const $H = ($E) => { ... <... $E.data ...>; ... };
+                      ...
+                  - pattern-inside: |
+                      function $H($E) { ... <... $E.data ...>; ... }
+                      ...
+              - pattern: window.addEventListener("message", $H, ...)
+              - pattern-not-inside: |
+                  const $H = ($E) => { ... <... $E.origin ...>; ... };
+                  ...
+              - pattern-not-inside: |
+                  function $H($E) { ... <... $E.origin ...>; ... }
+                  ...
+              - pattern-not-inside: |
+                  const $H = ($E) => { ... <... $E.source ...>; ... };
+                  ...
+              - pattern-not-inside: |
+                  const $H = ($E) => { ... const {origin} = $E; ... };
+                  ...
+      - pattern-not: window.addEventListener("message", ($E) => { ... <... $E.origin ...>; ... }, ...)
+      - pattern-not: window.addEventListener("message", function ($E) { ... <... $E.origin ...>; ... }, ...)
+      - pattern-not: window.addEventListener("message", ($E) => { ... <... $E.source ...>; ... }, ...)
+      - pattern-not: window.addEventListener("message", function ($E) { ... <... $E.source ...>; ... }, ...)
+      - pattern-not: window.addEventListener("message", ($E) => { ... const {origin} = $E; ... }, ...)
+      - pattern-not: window.onmessage = ($E) => { ... <... $E.origin ...>; ... }
+      - pattern-not: window.onmessage = function ($E) { ... <... $E.origin ...>; ... }
+
+  # ---------------------------------------------------------------------------
+  # CORS: request Origin reflected into Access-Control-Allow-Origin together
+  # with Access-Control-Allow-Credentials: true.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.cors-reflected-origin-credentials
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      The request's Origin header is copied into Access-Control-Allow-Origin while
+      Access-Control-Allow-Credentials is "true", so any website can make authenticated requests with the
+      user's cookies and read the responses. Only echo the origin after checking it against an explicit allowlist.
+    metadata:
+      cwe: ["CWE-942"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    # The credentials header must be set in the same statement list as the sink, not in a sibling handler.
+    options:
+      go_deeper_stmt: false
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.headers.origin
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.headers.get($HDR)
+                  - pattern: $REQ.headers[$HDR]
+                  - pattern: $REQ.header($HDR)
+              - metavariable-regex:
+                  metavariable: $HDR
+                  regex: '(?i)^["''`]origin["''`]$'
+          # req.get("Origin") (Express) / ctx.get("Origin") (Koa); other .get("origin") calls read config or maps.
+          - patterns:
+              - pattern: $REQ.get($HDR)
+              - metavariable-regex:
+                  metavariable: $HDR
+                  regex: '(?i)^["''`]origin["''`]$'
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(?:[\w$]+\.)?(?:req|request|ctx|context)$'
+    pattern-sanitizers:
+      # An allowlist / equality / pattern check on the origin value sanitizes it from that point on, also when
+      # the value is wrapped (origin as string, origin ?? "", origin!, new URL(origin).hostname).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $LIST.includes(<... $X ...>)
+              - pattern: $LIST.indexOf(<... $X ...>)
+              - pattern: $LIST.has(<... $X ...>)
+              - pattern: $RE.test(<... $X ...>)
+              - pattern: $X.match(...)
+              - pattern: $X.endsWith(...)
+              - pattern: $X === $Y
+              - pattern: $Y === $X
+              - pattern: $X !== $Y
+              - pattern: $X == $Y
+              - pattern: $X != $Y
+              - patterns:
+                  - pattern: $CHECK(<... $X ...>)
+                  - metavariable-regex:
+                      metavariable: $CHECK
+                      regex: '(?i).*(?:allow|valid|trust|whitelist|permit|check|verify)'
+          - metavariable-regex:
+              metavariable: $X
+              regex: '^[\w$]+(?:\.[\w$]+)*$'
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $RES.$SET("Access-Control-Allow-Origin", $SINK)
+                      - pattern: $RES.$SET("access-control-allow-origin", $SINK)
+                  - pattern-either:
+                      - pattern-inside: |
+                          $R2.$S2("Access-Control-Allow-Credentials", $TRUE);
+                          ...
+                      - pattern-inside: |
+                          ...
+                          $R2.$S2("Access-Control-Allow-Credentials", $TRUE);
+                      - pattern-inside: |
+                          $R2.$S2("access-control-allow-credentials", $TRUE);
+                          ...
+                      - pattern-inside: |
+                          ...
+                          $R2.$S2("access-control-allow-credentials", $TRUE);
+                  - metavariable-regex:
+                      metavariable: $TRUE
+                      regex: '^(?:true|["''`]true["''`])$'
+              - patterns:
+                  - pattern-either:
+                      - pattern: '{..., "Access-Control-Allow-Origin": $SINK, ..., "Access-Control-Allow-Credentials": $TRUE, ...}'
+                      - pattern: '{..., "access-control-allow-origin": $SINK, ..., "access-control-allow-credentials": $TRUE, ...}'
+                  - metavariable-regex:
+                      metavariable: $TRUE
+                      regex: '^(?:true|["''`]true["''`])$'
+          # Short-circuit guards (if (origin && allowed.includes(origin)) {...}) are not seen by the side-effect
+          # sanitizer, so a sink is skipped inside an if whose condition checks that same value (includes/has/
+          # indexOf/some/test/isAllowed(...), endsWith, ===), or after an early return/throw guarded that way.
+          # Unrelated conditions (if (req.method === "OPTIONS")) do not hide the sink.
+          - pattern-not-inside: if (<... $CHECKFN(..., <... $SINK ...>, ...) ...>) { ... }
+          - pattern-not-inside: if (<... $SINK.endsWith(...) ...>) { ... }
+          - pattern-not-inside: if (<... $SINK.match(...) ...>) { ... }
+          - pattern-not-inside: if (<... $SINK === $OTHER ...>) { ... }
+          - pattern-not-inside: if (<... $OTHER === $SINK ...>) { ... }
+          - pattern-not-inside: |
+              if (<... $CHECKFN(..., <... $SINK ...>, ...) ...>) { ... return ...; }
+              ...
+          - pattern-not-inside: |
+              if (<... $CHECKFN(..., <... $SINK ...>, ...) ...>) return ...;
+              ...
+          - pattern-not-inside: |
+              if (<... $CHECKFN(..., <... $SINK ...>, ...) ...>) { ... throw ...; }
+              ...
+          # switch (origin) { case "https://app.example.com": ... } is an allowlist.
+          - pattern-not-inside: |
+              switch ($SINK) { case $ALLOWED: ... }
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------
+  # CORS middleware/config that accepts every origin with credentials.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.cors-permissive-origin-credentials
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      This CORS configuration accepts every origin (origin: true, a callback that always allows, or a reflected
+      Origin header) while credentials: true, so any website can make authenticated requests with the user's
+      cookies and read the responses. Set origin to an explicit list of trusted origins.
+    metadata:
+      cwe: ["CWE-942"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    pattern-either:
+      - pattern: '{origin: true, credentials: true}'
+      - pattern: '{origin: ($ORIG, $CB) => { $CB(null, true); }, credentials: true}'
+      - pattern: '{origin: function ($ORIG, $CB) { $CB(null, true); }, credentials: true}'
+      - pattern: '{origin: ($ORIG, $CB) => { $CB(null, $ORIG); }, credentials: true}'
+      - pattern: '{origin: function ($ORIG, $CB) { $CB(null, $ORIG); }, credentials: true}'
+      - pattern: '{origin: ($ORIG) => $ORIG, credentials: true}'
+      - pattern: '{origin: ($ORIG, $CTX) => $ORIG, credentials: true}'
+      - pattern: '{origin: $REQ.headers.origin, credentials: true}'
+      - pattern: '{origin: $REQ.header("origin"), credentials: true}'
+      - pattern: '{origin: $REQ.headers.get("origin"), credentials: true}'
+      - pattern: '{origin: $REQ.headers.get("Origin"), credentials: true}'
+
+  # ---------------------------------------------------------------------------
+  # CORS: wildcard origin combined with credentials (invalid and a warning sign).
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.cors-wildcard-origin-credentials
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Access-Control-Allow-Origin "*" is combined with credentials; browsers reject this pair, and the usual
+      "fix" of echoing the request Origin lets any site read authenticated responses. Use an explicit allowlist of
+      trusted origins, or drop credentials for a truly public API.
+    metadata:
+      cwe: ["CWE-942"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+    options:
+      go_deeper_stmt: false
+    pattern-either:
+      - pattern: '{origin: "*", credentials: true}'
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.$SET("Access-Control-Allow-Origin", "*")
+              - pattern: $RES.$SET("access-control-allow-origin", "*")
+          - pattern-either:
+              - pattern-inside: |
+                  $R2.$S2("Access-Control-Allow-Credentials", $TRUE);
+                  ...
+              - pattern-inside: |
+                  ...
+                  $R2.$S2("Access-Control-Allow-Credentials", $TRUE);
+              - pattern-inside: |
+                  $R2.$S2("access-control-allow-credentials", $TRUE);
+                  ...
+              - pattern-inside: |
+                  ...
+                  $R2.$S2("access-control-allow-credentials", $TRUE);
+          - metavariable-regex:
+              metavariable: $TRUE
+              regex: '^(?:true|["''`]true["''`])$'
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., "Access-Control-Allow-Origin": $STAR, ..., "Access-Control-Allow-Credentials": $TRUE, ...}'
+              - pattern: '{..., "access-control-allow-origin": $STAR, ..., "access-control-allow-credentials": $TRUE, ...}'
+          - metavariable-regex:
+              metavariable: $STAR
+              regex: '^["''`]\*["''`]$'
+          - metavariable-regex:
+              metavariable: $TRUE
+              regex: '^(?:true|["''`]true["''`])$'
+          - focus-metavariable: $STAR
+
+  # ---------------------------------------------------------------------------
+  # TLS certificate verification disabled.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      TLS certificate verification is disabled (rejectUnauthorized: false, tlsAllowInvalidCertificates: true or
+      NODE_TLS_REJECT_UNAUTHORIZED=0), so
+      anyone on the network path can impersonate the server and read or change the traffic, including database
+      and API credentials. Keep verification on and supply the provider's CA certificate (ca option or
+      NODE_EXTRA_CA_CERTS) instead.
+    metadata:
+      cwe: ["CWE-295"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+    pattern-either:
+      - patterns:
+          - pattern: '{..., rejectUnauthorized: $OFF, ...}'
+          - metavariable-regex:
+              metavariable: $OFF
+              regex: ^false$
+          - focus-metavariable: $OFF
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., strictSSL: $OFF, ...}'
+              - pattern: '{..., sslValidate: $OFF, ...}'
+          - metavariable-regex:
+              metavariable: $OFF
+              regex: ^false$
+          - focus-metavariable: $OFF
+      # MongoDB driver / Mongoose options.
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., tlsAllowInvalidCertificates: $ON, ...}'
+              - pattern: '{..., tlsAllowInvalidHostnames: $ON, ...}'
+              - pattern: '{..., tlsInsecure: $ON, ...}'
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^true$
+          - focus-metavariable: $ON
+      - pattern: $AGENT.rejectUnauthorized = false
+      - patterns:
+          - pattern-either:
+              - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = $V
+              - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = $V
+          - metavariable-regex:
+              metavariable: $V
+              regex: '^["''`]?0["''`]?$'
+
+  # ---------------------------------------------------------------------------
+  # Math.random() used for secrets, tokens, passwords or one-time codes.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.insecure-random-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Math.random() is not cryptographically secure, and here it generates a value that looks like a token,
+      password, session id, secret or one-time code, which an attacker can predict. Use crypto.randomUUID(),
+      crypto.getRandomValues() (browser/Workers) or crypto.randomBytes()/crypto.randomInt() (Node.js).
+    metadata:
+      cwe: ["CWE-338"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+    patterns:
+      - pattern: Math.random()
+      - pattern-either:
+          # A variable, property or object key with a secret-like name receives the random value.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: $NAME = $VALUE
+                  - pattern-inside: $NAME += $VALUE
+                  - pattern-inside: '{..., $NAME: <... Math.random() ...>, ...}'
+              - pattern-not-inside: $NAME = (...) => {...}
+              - pattern-not-inside: $NAME = function (...) {...}
+              # camelCase/snake_case aware; skips game/UI values such as secretNumber, tokenCount, passwordLength.
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: '(?!.*(?i:count|number|length|size|index|width|height|delay|duration|timeout|interval|colou?r|position|offset|limit|score|weight|chance|probability|speed|angle|opacity|guess|(?<!pass)word|dice|animation|jitter|retry|backoff))(?:code$|.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z]))(?i:token|secret|passw(?:or)?d|pass_?phrase|nonce|salt|otp|csrf|xsrf|api_?key|access_?key|private_?key|session_?(?:id|key)|jwt|(?:reset|verif(?:y|ication)|auth|invite|invitation|pin|confirm(?:ation)?|login|security|recovery|activation|magic|one_?time|sms|email)_?code)(?=$|[^a-z]))'
+          # Inside a generator function such as generateToken(), createSessionId(), randomPassword(), genOtp().
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: function $FN(...) {...}
+                  - pattern-inside: $FN = (...) => {...}
+                  - pattern-inside: $FN = function (...) {...}
+                  - pattern-inside: |
+                      class $CLASS {
+                        ...
+                        $FN(...) {...}
+                        ...
+                      }
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: '(?!.*(?i:count|number|length|size|index|width|height|delay|duration|timeout|interval|colou?r|position|offset|limit|score|weight|chance|probability|speed|angle|opacity|guess|(?<!pass)word|dice|animation|jitter|retry|backoff))(?i:(?:[\w$]+\.)?(?:generate|gen|create|make|new|random|issue|mint|build)_?(?:[a-z0-9_]*?(?:token|secret|password|passwd|pass_?phrase|nonce|salt|otp|csrf|xsrf|api_?key|access_?key|session_?(?:id|key)|jwt|pin)|(?:reset|verif(?:y|ication)|auth|invite|invitation|confirm(?:ation)?|login|security|recovery|activation|magic|one_?time|sms|email|mfa|2fa|otp)?_?code)s?)$'
+
+  # ---------------------------------------------------------------------------
+  # Passwords hashed with a fast, unsalted digest (MD5/SHA-*).
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.weak-password-hash
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A password is hashed with a fast digest (MD5/SHA-1/SHA-256/SHA-512 via createHash, crypto.subtle.digest or a
+      hash library); leaked hashes like these are cracked quickly with GPUs. Store passwords with a slow, salted
+      password hash: bcrypt, scrypt or argon2 in Node.js, or PBKDF2 with 100k+ iterations via
+      crypto.subtle.deriveBits in Workers.
+    metadata:
+      cwe: ["CWE-916"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: $PW
+          - metavariable-regex:
+              metavariable: $PW
+              # Not a stored password: hashes/tokens/UI state, timestamps (passwordUpdatedAt), and secrets read from
+              # the environment (hashing process.env.ADMIN_PASSWORD for a comparison stores nothing).
+              regex: '(?!.*(?i:hash|token|reset|salt|length|policy|regex|pattern|strength|error|label|visible|show|valid|expir|placeholder|field|input|confirm))(?!.*(?:[Uu]pdated|[Cc]hanged|[Aa]ttempt|[Vv]ersion|At$))(?!(?:process\.|import\.meta\.)?env\.)[\w$]+(?:\.[\w$]+)*$'
+          - metavariable-regex:
+              metavariable: $PW
+              regex: '.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z]))(?i:passw(?:or)?d|pass_?phrase|pwd)(?=$|[^a-z])'
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: bcrypt.$F(...)
+          - pattern: bcryptjs.$F(...)
+          - pattern: argon2.$F(...)
+          - pattern: $C.pbkdf2Sync(...)
+          - pattern: $C.scryptSync(...)
+          - pattern: $X.length
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $C.createHash($ALG).update($SINK, ...)
+                      - pattern: createHash($ALG).update($SINK, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $H = $C.createHash($ALG);
+                                  ...
+                              - pattern-inside: |
+                                  $H = createHash($ALG);
+                                  ...
+                          - pattern: $H.update($SINK, ...)
+                  - metavariable-regex:
+                      metavariable: $ALG
+                      regex: '(?i)^["''`](?:md4|md5|sha-?1|sha-?224|sha-?256|sha-?384|sha-?512|sha3-\d+|ripemd-?160)["''`]$'
+              - pattern: $CRYPTO.subtle.digest($ALG, $SINK)
+              - pattern: subtle.digest($ALG, $SINK)
+              - patterns:
+                  - pattern-either:
+                      - pattern: CryptoJS.$FN($SINK, ...)
+                      - pattern: $FN($SINK)
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(?:MD5|SHA1|SHA224|SHA256|SHA384|SHA512|SHA3|RIPEMD160|md5|sha1|sha256|sha512)$
+          # Have I Been Pwned range checks need the uppercase SHA-1 of the password; that is not storage.
+          - pattern-not-inside: $X.toUpperCase()
+          # Digests compared with timingSafeEqual (equal-length constant-time comparison of a secret) are not
+          # stored password hashes.
+          - pattern-not-inside: |
+              { ... <... timingSafeEqual(...) ...>; ... }
+          - pattern-not-inside: |
+              { ... <... $TSE.timingSafeEqual(...) ...>; ... }
+          - focus-metavariable: $SINK
+
+  # ---------------------------------------------------------------------------
+  # JWT verification that accepts the "none" algorithm.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.jwt-none-algorithm
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      JWT verification allows the "none" algorithm, so an attacker can forge unsigned tokens and log in as any
+      user. List only the algorithm you actually sign with, e.g. algorithms: ["HS256"] or ["RS256"].
+    metadata:
+      cwe: ["CWE-347"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    patterns:
+      - pattern: '{..., algorithms: [..., $ALG, ...], ...}'
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: '(?i)^["''`]none["''`]$'
+      - focus-metavariable: $ALG
+
+  # ---------------------------------------------------------------------------
+  # JWT decoded (not verified) inside a request handler / middleware.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.jwt-decode-without-verify
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A JWT is decoded without verifying its signature inside a request handler or middleware; decode only
+      base64-parses the token, so anyone can forge the claims (user id, role) it returns. Use jwt.verify() (or
+      jose jwtVerify()) with your secret/public key and a fixed algorithms list before trusting any claim.
+    metadata:
+      cwe: ["CWE-347"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: jwt.decode(...)
+          - pattern: jsonwebtoken.decode(...)
+          - pattern: jwtDecode(...)
+          - pattern: jwt_decode(...)
+          - pattern: decodeJwt(...)
+          - pattern: jose.decodeJwt(...)
+      - pattern-either:
+          # Express / Next.js API routes: (req, res[, next]) handlers.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: function $F($REQ, $RES, ...) { $...BODY }
+                  - pattern-inside: ($REQ, $RES, ...) => { $...BODY }
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^(?:req|request)$
+              - metavariable-regex:
+                  metavariable: $RES
+                  regex: ^(?:res|response|reply)$
+              # A route registered with middleware (app.get("/me", authenticate, handler)) is verified there.
+              - pattern-not-inside: $APP.$M($PATH, $MW, ..., function ($REQ, $RES, ...) {...})
+              - pattern-not-inside: $APP.$M($PATH, $MW, ..., ($REQ, $RES, ...) => {...})
+          # Next.js middleware and App Router route handlers (export async function GET(request) {...}).
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: function $F(...) { $...BODY }
+                  - pattern-inside: const $F = (...) => { $...BODY }
+              - metavariable-regex:
+                  metavariable: $F
+                  regex: ^(?:middleware|GET|POST|PUT|PATCH|DELETE)$
+          # Hono / Koa handlers registered without route middleware: app.get("/me", async (c) => {...}).
+          - patterns:
+              - pattern-inside: $APP.$M($PATH, ($CTX) => { $...BODY })
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(?:get|post|put|patch|delete|all|use|on)$
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: ^(?:c|ctx|context)$
+      # Not flagged when the same handler also verifies the token: jwt.verify(), jwtVerify(), verifyToken(),
+      # verifyIdToken(), verifyJwt(), validateToken() and similar helpers.
+      - metavariable-regex:
+          metavariable: $...BODY
+          regex: '(?s)(?!.*(?:[Vv]erif\w*|[Vv]alidate\w*(?:Token|Jwt|JWT|Session|Auth)\w*)\s*\()'
+
+  # ---------------------------------------------------------------------------
+  # Session/auth cookies readable from JavaScript (httpOnly off or missing).
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.auth-cookie-without-httponly
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      This session/auth cookie is set without httpOnly (explicitly false, or omitted where the default is off:
+      Express res.cookie, Next.js cookies().set, Hono/Fastify setCookie, a raw Set-Cookie header), so any
+      cross-site scripting bug can read and steal it. Set httpOnly: true (HttpOnly in a raw header), plus
+      secure: true and sameSite, on authentication cookies.
+    metadata:
+      cwe: ["CWE-1004"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: '$RECV.cookie($...ARGS, {..., httpOnly: false, ...})'
+              - pattern: '$RECV.set($...ARGS, {..., httpOnly: false, ...})'
+              - pattern: '$RECV.setCookie($...ARGS, {..., httpOnly: false, ...})'
+              - pattern: 'setCookie($...ARGS, {..., httpOnly: false, ...})'
+              # Express res.cookie() defaults to httpOnly off: flag a literal options object without httpOnly...
+              - patterns:
+                  - pattern: '$RECV.cookie($...ARGS, {...})'
+                  - pattern-not: '$RECV.cookie(..., {..., httpOnly: $H, ...})'
+                  - pattern-not: '$RECV.cookie(..., {..., ...$SPREAD, ...})'
+              # ...or no options at all (a non-literal options variable is not judged).
+              - patterns:
+                  - pattern: $RECV.cookie($...ARGS)
+                  - pattern-not: $RECV.cookie($A, $B, $C, ...)
+              # Next.js cookies().set / response.cookies.set, Fastify reply.setCookie() and Hono setCookie(c, ...)
+              # also default to httpOnly off: same two checks (literal options without httpOnly, or no options).
+              - patterns:
+                  - pattern: '$RECV.set($...ARGS, {...})'
+                  - pattern-not: '$RECV.set(..., {..., httpOnly: $H, ...})'
+                  - pattern-not: '$RECV.set(..., {..., ...$SPREAD, ...})'
+                  - pattern-not: $RECV.set($A, $B, $C, $D, ...)
+                  # Only cookie stores: Express res.set() / Map.set() are not cookies.
+                  - metavariable-regex:
+                      metavariable: $RECV
+                      regex: '^(?:\(?\s*(?:await\s+)?cookies\(\)\s*\)?|[\w$.]*\.cookies|cookieStore|cookieJar)$'
+              - patterns:
+                  - pattern: $RECV.set($...ARGS)
+                  - pattern-not: $RECV.set($A, $B, $C, ...)
+                  - metavariable-regex:
+                      metavariable: $RECV
+                      regex: '^(?:\(?\s*(?:await\s+)?cookies\(\)\s*\)?|[\w$.]*\.cookies|cookieStore|cookieJar)$'
+              - patterns:
+                  - pattern: '$RECV.setCookie($...ARGS, {...})'
+                  - pattern-not: '$RECV.setCookie(..., {..., httpOnly: $H, ...})'
+                  - pattern-not: '$RECV.setCookie(..., {..., ...$SPREAD, ...})'
+                  - pattern-not: $RECV.setCookie($A, $B, $C, $D, ...)
+              - patterns:
+                  - pattern: $RECV.setCookie($...ARGS)
+                  - pattern-not: $RECV.setCookie($A, $B, $C, ...)
+              - patterns:
+                  - pattern: 'setCookie($CTX, $...ARGS, {...})'
+                  - pattern-not: 'setCookie(..., {..., httpOnly: $H, ...})'
+                  - pattern-not: 'setCookie(..., {..., ...$SPREAD, ...})'
+                  - pattern-not: setCookie($A, $B, $C, $D, $E, ...)
+                  - metavariable-regex:
+                      metavariable: $CTX
+                      regex: ^(?:c|ctx|context|event)$
+              - patterns:
+                  - pattern: setCookie($CTX, $...ARGS)
+                  - pattern-not: setCookie($A, $B, $C, $D, ...)
+                  - metavariable-regex:
+                      metavariable: $CTX
+                      regex: ^(?:c|ctx|context|event)$
+          # Clearing a cookie on logout (empty value, maxAge 0, expires in the past) exposes nothing.
+          - pattern-not: $RECV.$SETTER($N, "", ...)
+          - pattern-not: $RECV.$SETTER($N, null, ...)
+          - pattern-not: setCookie($CTX, $N, "", ...)
+          - pattern-not: '$RECV.$SETTER(..., {..., maxAge: 0, ...})'
+          - pattern-not: '$RECV.$SETTER(..., {..., expires: new Date(0), ...})'
+          # Cookie name or value looks like a session/auth token; CSRF tokens must stay readable and are skipped.
+          - metavariable-regex:
+              metavariable: $...ARGS
+              regex: '(?!.*(?i:csrf|xsrf|expir))(?:.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z])))(?i:token|jwt|session|sess|sid|auth|refresh|remember_?me)(?=$|[^a-z])'
+      - patterns:
+          - pattern-either:
+              - pattern: 'session({..., cookie: $COOKIEOPTS, ...})'
+              - pattern: 'cookieSession($COOKIEOPTS)'
+          - metavariable-pattern:
+              metavariable: $COOKIEOPTS
+              pattern: '{..., httpOnly: false, ...}'
+          - focus-metavariable: $COOKIEOPTS
+      # Raw Set-Cookie header (Cloudflare Workers, Node http) for an auth cookie without the HttpOnly attribute.
+      - patterns:
+          - pattern-either:
+              - pattern: $HEADERS.$SET("Set-Cookie", $COOKIE)
+              - pattern: $HEADERS.$SET("set-cookie", $COOKIE)
+              - pattern: '{..., "Set-Cookie": $COOKIE, ...}'
+              - pattern: '{..., "set-cookie": $COOKIE, ...}'
+          - metavariable-regex:
+              metavariable: $COOKIE
+              regex: '(?is)^["''`]\s*(?!.*httponly)(?!.*(?:max-age=0\b|expires=thu,\s*01\s+jan\s+1970))(?![\w.-]*(?:csrf|xsrf))(?:__(?:host|secure)-)?[\w.-]*(?:token|jwt|session|sess|sid|auth|refresh)[\w.-]*='
+          - focus-metavariable: $COOKIE
+
+  # ---------------------------------------------------------------------------
+  # Session/auth cookies explicitly marked secure: false.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.auth-cookie-secure-disabled
+    languages: [javascript, typescript]
+    severity: INFO
+    message: >-
+      This session/auth cookie is set with secure: false, so the browser also sends it over plain HTTP where it can
+      be intercepted. Use secure: true in production (for example secure: process.env.NODE_ENV === "production").
+    metadata:
+      cwe: ["CWE-614"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: '$RECV.cookie($...ARGS, {..., secure: false, ...})'
+              - pattern: '$RECV.set($...ARGS, {..., secure: false, ...})'
+              - pattern: '$RECV.setCookie($...ARGS, {..., secure: false, ...})'
+              - pattern: 'setCookie($...ARGS, {..., secure: false, ...})'
+          # Clearing a cookie on logout (empty value, maxAge 0, expires in the past) exposes nothing.
+          - pattern-not: $RECV.cookie($N, "", ...)
+          - pattern-not: $RECV.cookie($N, null, ...)
+          - pattern-not: '$RECV.cookie(..., {..., maxAge: 0, ...})'
+          - pattern-not: '$RECV.cookie(..., {..., expires: new Date(0), ...})'
+          - metavariable-regex:
+              metavariable: $...ARGS
+              regex: '(?!.*(?i:csrf|xsrf|expir))(?:.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z])))(?i:token|jwt|session|sess|sid|auth|refresh|remember_?me)(?=$|[^a-z])'
+      - patterns:
+          - pattern-either:
+              - pattern: 'session({..., cookie: $COOKIEOPTS, ...})'
+              - pattern: 'cookieSession($COOKIEOPTS)'
+          - metavariable-pattern:
+              metavariable: $COOKIEOPTS
+              pattern: '{..., secure: false, ...}'
+          - focus-metavariable: $COOKIEOPTS
+
+  # ---------------------------------------------------------------------------
+  # Auth tokens stored where any script on the page can read them.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.token-in-browser-storage
+    languages: [javascript, typescript]
+    severity: INFO
+    message: >-
+      An auth token, session id or credential is stored in localStorage/sessionStorage or a JavaScript-set cookie, where any
+      cross-site scripting bug or third-party script can read it. Prefer an httpOnly, secure, sameSite cookie set
+      by the server, or keep short-lived tokens in memory only.
+    metadata:
+      cwe: ["CWE-922"]
+      owasp: ["A04:2021 - Insecure Design"]
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: localStorage.setItem($KEY, $VALUE)
+              - pattern: window.localStorage.setItem($KEY, $VALUE)
+              - pattern: sessionStorage.setItem($KEY, $VALUE)
+              - pattern: window.sessionStorage.setItem($KEY, $VALUE)
+              - pattern: localStorage[$KEY] = $VALUE
+              - pattern: localStorage.$KEY = $VALUE
+              - pattern: Cookies.set($KEY, $VALUE, ...)
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: '(?!.*(?i:csrf|xsrf|expir|expires|timestamp))(?:.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z])))(?i:token|jwt|session|auth|bearer|credentials?|secret|password|api_?key|api-key)(?=$|[^a-z])'
+      # document.cookie = "token=..." (the cookie name is checked; clearing it with an empty value, Max-Age=0 or
+      # an expired date stores nothing).
+      - patterns:
+          - pattern: document.cookie = $COOKIE
+          - metavariable-regex:
+              metavariable: $COOKIE
+              regex: '(?is)^["''`]\s*(?![\w.-]*(?:csrf|xsrf|expir))[\w.-]*(?:token|jwt|session|auth|bearer|sid)[\w.-]*=(?!\s*;)(?!.*max-age=0\b)(?!.*expires=thu,\s*01\s+jan\s+1970)'
+      # Generic key ("user", "auth-storage") but the stored value carries the token.
+      - patterns:
+          - pattern-either:
+              - pattern: localStorage.setItem($KEY, $VALUE)
+              - pattern: window.localStorage.setItem($KEY, $VALUE)
+              - pattern: sessionStorage.setItem($KEY, $VALUE)
+              - pattern: window.sessionStorage.setItem($KEY, $VALUE)
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: '(?!.*(?i:csrf|xsrf|expir))'
+          - metavariable-regex:
+              metavariable: $VALUE
+              regex: '(?s).*(?<![\w$])(?:[\w$]+\.)*(?:access_?[Tt]oken|refresh_?[Tt]oken|id_?[Tt]oken|auth_?[Tt]oken|jwt|token)(?![\w$])'

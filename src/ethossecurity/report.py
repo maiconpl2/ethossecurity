@@ -9,7 +9,7 @@ def html_report(report, output, language='pt-BR'):
     def e(value):
         return escape(str(value or '—'), quote=True)
     state = t('Verificações habilitadas concluídas', 'Enabled checks completed') if report['complete'] else t('Análise incompleta', 'Incomplete analysis')
-    rows = ''.join('<tr><td>' + e(r['scanner']) + '</td><td>' + e(r['status']) + '</td><td>' + e(r.get('reason')) + '</td></tr>' for r in report['executions'])
+    rows = ''.join('<tr><td>' + e(r['scanner']) + '</td><td>' + e(r['status']) + '</td><td>' + e(' '.join(filter(None, [r.get('reason'), ', '.join(r.get('unanalyzed_files', []))]))) + '</td></tr>' for r in report['executions'])
     cards = []
     for f in report['findings']:
         location = (f.get('file') or f.get('endpoint') or '—') + (':' + str(f['line']) if f.get('line') else '')

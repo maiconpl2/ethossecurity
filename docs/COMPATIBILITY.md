@@ -27,6 +27,16 @@ Pinned binary releases are supplied for Windows x64, Linux x64, macOS Intel and 
 - Claude Code's native validator passed with a non-blocking author-attribution warning. The normal initial connection was Pending approval. Only the isolated test process was then given explicit authorization for EthosSecurity; the native client reported Connected. No personal account setup or model call was used. Antigravity's validator processed the native bundle without installing it into the user's global plugin registry.
 - Real scanner execution and package/release tests are recorded in the release notes once complete. Tests against the MCP Python SDK establish protocol behavior; they do not prove a client's user interface loaded the tools.
 
+## Claude Code plugin marketplace (v0.3.0)
+
+Validation date: **2026-10-01**, Windows x64, Claude Code 2.1.284.
+
+- `claude plugin validate` passed for `.claude-plugin/marketplace.json`. Installing `full-scan@ethossecurity` pulled its four dependencies (`ethossecurity`, `bug-hunter`, `app-security`, `infra-security`) automatically.
+- `claude plugin details` reported the intended inventory: the `ethossecurity` engine has one MCP server and no skills; each skill plugin has exactly one skill and no MCP server.
+- `claude mcp list`, run inside a project, reported `plugin:ethossecurity:ethossecurity` as Connected. Over MCP stdio with the plugin's exact command, `security_setup` prepared the four pinned scanners in `~/.ethossecurity/` and `security_scan` completed against a synthetic project without modifying it; the planted credential was omitted from the report.
+- Fixed during validation: under MCP on Windows, Semgrep preparation hung because `ensurepip` inherited the server's stdin pipe; Gitleaks ignored an entire project whose parent folder was named `.ethossecurity`; Semgrep wrote non-UTF-8 reports for paths with accented characters.
+- Semgrep starter rules: 72 rules for Python, JavaScript/TypeScript, GitHub Actions and Firebase rules, each with annotated vulnerable (`ruleid`) and safe (`ok`) fixtures run by `semgrep --test` in CI. A synthetic vulnerable app produced the expected findings for every planted issue; a real 67-file project scanned in about 7 seconds with one alert to review. Intra-file taint only (Semgrep OSS): flows through helper functions in other files are not followed.
+
 ## Official integration references
 
 - [Codex MCP](https://developers.openai.com/codex/mcp) and [plugin packaging](https://developers.openai.com/plugins/build/plugins).

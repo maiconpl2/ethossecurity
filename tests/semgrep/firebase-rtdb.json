@@ -1,0 +1,114 @@
+// Synthetic Realtime Database rules (database.rules.json) used as Semgrep rule fixtures.
+// Each array element stands for the rules file of a different project.
+[
+  {
+    "rules": {
+      // ruleid: ethos.json.firebase-rtdb-test-mode
+      ".read": "now < 1767225600000",  // 2026-1-1
+      // ruleid: ethos.json.firebase-rtdb-test-mode
+      ".write": "now < 1767225600000",  // 2026-1-1
+    }
+  },
+  {
+    "rules": {
+      // ruleid: ethos.json.firebase-rtdb-any-signed-in-user
+      ".read": "auth.uid != null",
+      // ruleid: ethos.json.firebase-rtdb-any-signed-in-user
+      ".write": "auth !== null",
+      "publicPosts": {
+        // ruleid: ethos.json.firebase-rtdb-public-read
+        ".read": true,
+        // ok: ethos.json.firebase-rtdb-public-write
+        ".write": "auth != null && auth.token.admin === true",
+        "$postId": {
+          // ok: ethos.json.firebase-rtdb-any-signed-in-user
+          ".write": "auth != null",
+          // ok: ethos.json.firebase-rtdb-public-read
+          ".validate": true
+        }
+      },
+      "chatMessages": {
+        // ruleid: ethos.json.firebase-rtdb-public-read
+        ".read": "true",
+        // ruleid: ethos.json.firebase-rtdb-public-write
+        ".write": true
+      }
+    }
+  },
+  {
+    "rules": {
+      // ok: ethos.json.firebase-rtdb-any-signed-in-user
+      ".read": "auth != null && root.child('admins').child(auth.uid).exists()",
+      "users": {
+        "$uid": {
+          // ok: ethos.json.firebase-rtdb-public-read
+          ".read": "auth != null && auth.uid === $uid",
+          // ok: ethos.json.firebase-rtdb-public-write
+          ".write": "auth != null && auth.uid === $uid",
+          "settings": {
+            // ok: ethos.json.firebase-rtdb-test-mode
+            ".write": "auth.uid === $uid && now < data.child('lockedUntil').val()"
+          }
+        }
+      },
+      "guestbook": {
+        "$entryId": {
+          // ruleid: ethos.json.firebase-rtdb-public-write
+          ".write": "true",
+          // ok: ethos.json.firebase-rtdb-test-mode
+          ".validate": "newData.child('createdAt').val() <= now"
+        }
+      }
+    }
+  },
+  {
+    "rules": {
+      // ruleid: ethos.json.firebase-rtdb-public-read-root
+      ".read": true,
+      // ok: ethos.json.firebase-rtdb-public-read-root
+      ".write": "auth != null && auth.token.admin === true",
+      "products": {
+        // ok: ethos.json.firebase-rtdb-public-read-root
+        ".read": "auth != null"
+      }
+    }
+  },
+  {
+    "rules": {
+      // ruleid: ethos.json.firebase-rtdb-public-read-root
+      ".read": "true",
+      // ok: ethos.json.firebase-rtdb-public-read-root
+      ".write": false
+    }
+  },
+  {
+    "rules": {
+      "users": {
+        "$uid": {
+          // ok: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+          ".read": "auth != null",
+          // ruleid: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+          ".write": "auth != null"
+        }
+      },
+      "profiles": {
+        "$userId": {
+          // ruleid: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+          ".write": "auth.uid !== null"
+        }
+      },
+      "rooms": {
+        "$roomId": {
+          // ok: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+          ".write": "auth != null"
+        }
+      },
+      "settings": {
+        "$uid": {
+          // ok: ethos.json.firebase-rtdb-user-node-any-signed-in-user
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    }
+  }
+]

@@ -87,6 +87,8 @@ Then, in any project open in Claude Code, ask: *"run a security review of this p
 
 **Version 0.2.0 — assisted installation under validation.** The new entrypoint prepares isolated tools, registers project MCP and four skills, and produces local JSON/HTML reports. Configuration formats for Codex, Claude Code and Antigravity were tested for preservation of other integrations and repeated setup. See actual tests and limitations in [compatibility](docs/COMPATIBILITY.md).
 
+**Version 0.3.0 — Claude Code plugin and expanded rules.** Claude Code now has its own marketplace with the analysis engine and one skill per plugin, so each person chooses what to install. The starter Semgrep rules grew from 2 to 72, covering command, SQL and code injection, path traversal, SSRF, XSS, CORS, disabled TLS, JWT, secrets with hardcoded fallbacks, GitHub Actions and Firebase rules across Python, JavaScript and TypeScript. Every rule has vulnerable and safe cases verified automatically in continuous integration.
+
 Starter code rules have limited coverage. Generated configuration does not mean all product connections have been qualified. A conversation without project access and tool execution cannot install EthosSecurity merely by receiving a link. There is no public hosted service, automatic remediation or security guarantee.
 
 ## Try it on your project

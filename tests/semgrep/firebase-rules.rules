@@ -1,0 +1,216 @@
+// Synthetic Firebase security rules used as Semgrep rule fixtures.
+// Firestore rules (firestore.rules)
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Starter rules generated during prototyping, kept for reference:
+    // ok: ethos.generic.firebase-rules-public-write
+    // allow read, write: if true;
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /{document=**} {
+      // ruleid: ethos.generic.firebase-rules-any-signed-in-user
+      allow read: if request.auth != null;
+      allow get: if isOwner(resource.data.ownerId);
+      allow list: if isOwner(resource.data.ownerId);
+      // ok: ethos.generic.firebase-rules-public-write
+      allow update: if isOwner(resource.data.ownerId);
+      // ruleid: ethos.generic.firebase-rules-any-signed-in-user
+      allow write: if request.auth != null;
+    }
+
+    match /users/{userId} {
+      // ok: ethos.generic.firebase-rules-public-read
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // ok: ethos.generic.firebase-rules-any-signed-in-user
+      allow create: if request.auth != null;
+      // ok: ethos.generic.firebase-rules-public-write
+      allow update, delete: if isOwner(userId);
+
+      match /{document=**} {
+        // ok: ethos.generic.firebase-rules-any-signed-in-user
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    match /posts/{postId} {
+      // ruleid: ethos.generic.firebase-rules-public-read
+      allow read: if true;
+      // ruleid: ethos.generic.firebase-rules-public-write
+      allow create, update, delete: if true;
+    }
+
+    match /drafts/{draftId} {
+      // ok: ethos.generic.firebase-rules-public-read
+      allow read: if resource.data.published == true;
+      // ok: ethos.generic.firebase-rules-public-create
+      allow create: if request.auth != null && request.resource.data.authorId == request.auth.uid;
+    }
+
+    // ruleid: ethos.generic.firebase-rules-public-write
+    match /comments/{commentId} { allow read, write; }
+
+    match /contactMessages/{messageId} {
+      // ruleid: ethos.generic.firebase-rules-public-create
+      allow create: if true;
+      // ok: ethos.generic.firebase-rules-public-create
+      allow create: if request.resource.data.keys().hasOnly(['name', 'email', 'message']) && request.resource.data.message.size() < 2000;
+    }
+
+    match /orders/{orderId} {
+      // ok: ethos.generic.firebase-rules-test-mode
+      allow read, write: if request.auth != null && request.time < timestamp.date(2030, 1, 1);
+      // ok: ethos.generic.firebase-rules-test-mode
+      allow update: if request.time < resource.data.editableUntil;
+    }
+
+    match /catalog/{itemId} {
+      // ruleid: ethos.generic.firebase-rules-public-read
+      allow get, list;
+      // ok: ethos.generic.firebase-rules-public-write
+      allow write: if false;
+    }
+  }
+}
+
+// Firestore rules left in console test mode (firestore.rules of another project)
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      // ruleid: ethos.generic.firebase-rules-test-mode
+      allow read, write: if request.time < timestamp.date(2025, 7, 14);
+    }
+  }
+}
+
+// Firestore rules of a catalog app that opened every collection for reading
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      // ruleid: ethos.generic.firebase-rules-public-read-wildcard
+      allow read: if true;
+      // ok: ethos.generic.firebase-rules-public-write
+      allow write: if request.auth != null && request.auth.token.admin == true;
+      // ok: ethos.generic.firebase-rules-public-read-wildcard
+      allow list: if resource.data.visibility == 'public';
+      // ok: ethos.generic.firebase-rules-public-read-wildcard
+      // allow get: if true;
+    }
+  }
+}
+
+// Cloud Storage rules (storage.rules)
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // ruleid: ethos.generic.firebase-rules-any-signed-in-user
+      allow read, write: if request.auth != null;
+    }
+
+    match /public/{fileName} {
+      // ok: ethos.generic.firebase-rules-any-signed-in-user
+      allow read: if request.auth != null;
+    }
+
+    match /uploads/{fileName} {
+      // ruleid: ethos.generic.firebase-rules-public-create
+      allow read, create;
+      // ok: ethos.generic.firebase-rules-public-write
+      allow delete: if request.auth != null && request.auth.uid == resource.metadata.ownerId;
+    }
+
+    match /avatars/{userId}/{fileName} {
+      // ruleid: ethos.generic.firebase-rules-public-write
+      allow write: if true;
+      // ok: ethos.generic.firebase-rules-public-read
+      allow read: if request.auth != null;
+      /*
+        Old open rule, disabled:
+        // ok: ethos.generic.firebase-rules-public-read
+        allow read: if true;
+      */
+    }
+
+    match /temp/{fileName} {
+      // ruleid: ethos.generic.firebase-rules-test-mode
+      allow read, write: if request.time < timestamp.date(2024, 12, 31);
+    }
+  }
+}
+
+// Storage rules of a photo gallery app
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // ruleid: ethos.generic.firebase-rules-public-read-wildcard
+      allow get, list;
+      // ok: ethos.generic.firebase-rules-public-read-wildcard
+      allow read: if request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    match /marketing/{allPaths=**} {
+      // ruleid: ethos.generic.firebase-rules-public-read
+      allow read;
+      // ok: ethos.generic.firebase-rules-public-create
+      allow create: if request.auth != null && request.resource.size < 5 * 1024 * 1024;
+    }
+  }
+}
+
+// Firestore rules written with helper functions (firestore.rules of a social app)
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    match /users/{userId} {
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow read: if isSignedIn();
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow create: if request.auth != null;
+      // ruleid: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow update, delete: if isSignedIn();
+    }
+
+    match /profiles/{uid} {
+      // ruleid: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow read, write: if request.auth != null;
+    }
+
+    match /customers/{customerId}/{document=**} {
+      // ruleid: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow write: if request.auth.uid != null;
+    }
+
+    match /accounts/{accountId} {
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow update: if request.auth != null && request.auth.uid == accountId;
+    }
+
+    match /teams/{teamId} {
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow write: if request.auth != null;
+    }
+
+    match /uploads/{fileId} {
+      allow read: if request.resource.contentType.matches('image/*'); // a slash-star (/*) here is not a comment
+      // ruleid: ethos.generic.firebase-rules-public-write
+      allow write: if true;
+    }
+
+    match /{document=**} {
+      // ruleid: ethos.generic.firebase-rules-any-signed-in-user
+      allow read: if isSignedIn();
+      // ok: ethos.generic.firebase-rules-any-signed-in-user
+      allow write: if isAdmin();
+    }
+  }
+}

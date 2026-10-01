@@ -1,6 +1,7 @@
 """Normalize native reports without upgrading scanner hypotheses to proof."""
 import hashlib
 import json
+import re
 from pathlib import Path
 from jsonschema import validate
 
@@ -21,23 +22,39 @@ def finding(source, rule, title, severity='medium', file=None, line=None,
     validate(result, json.loads((Path(__file__).parent / 'schemas/finding.json').read_text()))
     return result
 
+def relative(path, root):
+    # Report project-relative POSIX paths: stable ids across machines and no user directories in reports.
+    if not path or root is None:
+        return path
+    try:
+        candidate = Path(path)
+        return (candidate.resolve().relative_to(Path(root).resolve()) if candidate.is_absolute() else candidate).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+def rule_id(check_id):
+    # Semgrep prefixes ids of rules loaded from a directory with that directory's dotted path.
+    # The rule name has no dots, so a user folder called "ethos" in that path cannot match first.
+    match = re.search(r'ethos\.[a-z]+\.[A-Za-z0-9_-]+$', check_id)
+    return match.group(0) if match else check_id
+
 def strings(value):
     if not value:
         return []
     return [str(v) for v in value] if isinstance(value, list) else [str(value)]
 
-def normalize(source, data):
+def normalize(source, data, root=None):
     out = []
     if source == 'semgrep':
         for r in data['results']:
             e = r['extra']; m = e.get('metadata', {})
-            out.append(finding(source, r['check_id'], e['message'], e.get('severity', 'medium'),
-                r['path'], r['start']['line'], cwe=strings(m.get('cwe')), owasp=strings(m.get('owasp'))))
+            out.append(finding(source, rule_id(r['check_id']), e['message'], e.get('severity', 'medium'),
+                relative(r['path'], root), r['start']['line'], cwe=strings(m.get('cwe')), owasp=strings(m.get('owasp'))))
     elif source == 'gitleaks':
         if not isinstance(data, list):
             raise ValueError('Gitleaks report must be an array')
         for r in data:
-            out.append(finding(source, r['RuleID'], r['Description'], 'high', r['File'], r['StartLine'],
+            out.append(finding(source, r['RuleID'], r['Description'], 'high', relative(r['File'], root), r['StartLine'],
                 evidence='Secret detected; value deliberately omitted.', cwe=['CWE-798'],
                 recommendation='Revoke and rotate the credential; remove it from source and history.'))
     elif source == 'trivy':
@@ -46,10 +63,10 @@ def normalize(source, data):
         for group in data.get('Results') or []:
             for r in group.get('Vulnerabilities', []):
                 out.append(finding(source, r['VulnerabilityID'], r.get('Title') or r['VulnerabilityID'],
-                    r.get('Severity', 'unknown'), group.get('Target'), evidence=f"Package {r.get('PkgName')} version {r.get('InstalledVersion')}",
+                    r.get('Severity', 'unknown'), relative(group.get('Target'), root), evidence=f"Package {r.get('PkgName')} version {r.get('InstalledVersion')}",
                     cwe=strings(r.get('CweIDs')), recommendation=f"Upgrade to {r.get('FixedVersion') or 'a vendor-supported fixed release; none specified'}."))
             for r in group.get('Misconfigurations', []):
-                out.append(finding(source, r['ID'], r['Title'], r.get('Severity', 'unknown'), group.get('Target'),
+                out.append(finding(source, r['ID'], r['Title'], r.get('Severity', 'unknown'), relative(group.get('Target'), root),
                     r.get('CauseMetadata', {}).get('StartLine') or None, recommendation=r.get('Resolution')))
     elif source == 'osv':
         for group in data['results']:
@@ -59,7 +76,7 @@ def normalize(source, data):
                     # OSV frequently supplies CVSS vectors, not ordinal severities. Do not invent a score.
                     sev = r.get('database_specific', {}).get('severity', 'unknown')
                     out.append(finding(source, r['id'], r.get('summary') or r['id'], sev,
-                        group.get('source', {}).get('path'), evidence=f"Package {p.get('name')} version {p.get('version')}"))
+                        relative(group.get('source', {}).get('path'), root), evidence=f"Package {p.get('name')} version {p.get('version')}"))
     elif source == 'codeql':
         for run in data['runs']:
             rules = {r['id']: r for r in run.get('tool', {}).get('driver', {}).get('rules', [])}
@@ -72,7 +89,7 @@ def normalize(source, data):
                 if score is not None:
                     score = float(score); sev = 'critical' if score >= 9 else 'high' if score >= 7 else 'medium' if score >= 4 else 'low'
                 out.append(finding(source, r['ruleId'], r['message']['text'], sev,
-                    loc.get('artifactLocation', {}).get('uri'), loc.get('region', {}).get('startLine'),
+                    relative(loc.get('artifactLocation', {}).get('uri'), root), loc.get('region', {}).get('startLine'),
                     cwe=[t.upper().split('/')[-1] for t in tags if 'cwe-' in t.lower()]))
     elif source == 'zap':
         for site in data['site']:

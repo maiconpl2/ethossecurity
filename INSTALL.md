@@ -37,6 +37,10 @@ Prepare the tools, register the appropriate MCP connection and four skills, run 
 
 A project-bound native plugin bundle is also exported to `.ethossecurity/plugin/`, with compatibility manifests for Codex and Claude plus an Antigravity MCP file. Do not edit or register the user's global plugin registry implicitly. The normal assisted path registers MCP and skills at project scope; native marketplace installation is an optional separate host-specific action.
 
+### Claude Code plugin marketplace
+
+For Claude Code there is also a native, user-wide alternative that needs no per-project installation: `/plugin marketplace add maiconpl2/ethossecurity`, then install `full-scan@ethossecurity` or only the skills the user chooses (`bug-hunter`, `app-security`, `infra-security`); the `ethossecurity` engine is installed automatically as a dependency. Install it only when the user asks for the plugin. The engine requires [uv](https://docs.astral.sh/uv/) and scans the project open in the current session, treating it as untrusted: project-supplied `ethossecurity.yaml` and `.ethossecurity/runtime.json` are ignored. If `security_scan` reports unavailable scanners, call `security_setup` once; it prepares the same pinned, checksum-verified tools in `~/.ethossecurity/`. Reports are written to `~/.ethossecurity/reports/` and the project is not modified. An operator-trusted configuration can be placed at `~/.ethossecurity/ethossecurity.yaml`.
+
 The first scan prepares Semgrep, Trivy, Gitleaks and OSV-Scanner. CodeQL needs a prepared database and ZAP needs an authorized live target; neither runs automatically during onboarding. Downloads use GitHub publisher releases and PyPI. Trivy downloads vulnerability/policy data, and OSV queries advisory services using dependency identifiers. Full source upload is not part of the installer. Network access may be blocked by company policy.
 
 ## Scope and verification

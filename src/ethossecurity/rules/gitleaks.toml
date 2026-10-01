@@ -1,6 +1,14 @@
 [extend]
 useDefault = true
 
+# core.py runs "gitleaks dir ." from the project root, so matched paths are project-relative ("src/app.py"):
+# a parent folder named .ethossecurity can no longer hide the whole project. Inside the project, every
+# .ethossecurity folder (also a monorepo package's) holds only managed tools and reports, as semgrep also assumes.
 [[allowlists]]
-description = "Exclude the managed EthosSecurity runtime and local reports"
-paths = ['''(^|[/\\])\.ethossecurity([/\\]|$)''']
+description = "Exclude EthosSecurity runtime, tools and reports folders inside the project"
+paths = ['''(?:^|[/\\])\.ethossecurity(?:[/\\]|$)''']
+
+# Build output (dist/, build/) stays in scope: secrets bundled into a frontend build are real exposures.
+[[allowlists]]
+description = "Exclude dependency, VCS and cache folders inside the project"
+paths = ['''(?:^|[/\\])(?:node_modules|\.git|\.venv|venv|__pycache__)(?:[/\\]|$)''']
