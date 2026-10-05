@@ -12,7 +12,7 @@
       "name": "ethossecurity",
       "displayName": "EthosSecurity: motor de análise",
       "description": "Servidor MCP que analisa o projeto aberto no Claude Code com Semgrep, Trivy, Gitleaks e OSV-Scanner. Instalado automaticamente com qualquer skill.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Maicon"
       },
@@ -33,6 +33,7 @@
           "command": "uv",
           "args": [
             "run",
+            "--isolated",
             "--quiet",
             "--frozen",
             "--project",
@@ -44,7 +45,6 @@
             "mcp"
           ],
           "env": {
-            "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv",
             "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
           }
         }
@@ -54,7 +54,7 @@
       "name": "bug-hunter",
       "displayName": "EthosSecurity: caça a bugs",
       "description": "Skill de revisão de bugs e falhas de lógica com evidências, usando o perfil bug-hunter.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Maicon"
       },
@@ -72,7 +72,7 @@
       "name": "app-security",
       "displayName": "EthosSecurity: segurança da aplicação",
       "description": "Skill de revisão de autenticação, autorização, isolamento entre clientes, injeções, XSS, CSRF, SSRF e exposição de dados.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Maicon"
       },
@@ -90,7 +90,7 @@
       "name": "infra-security",
       "displayName": "EthosSecurity: segurança da infraestrutura",
       "description": "Skill de revisão de dependências vulneráveis, credenciais expostas e configurações de infraestrutura.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Maicon"
       },
@@ -108,7 +108,7 @@
       "name": "full-scan",
       "displayName": "EthosSecurity: análise completa",
       "description": "Coordena as três revisões e consolida os achados. Instala junto as skills de bugs, aplicação e infraestrutura.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Maicon"
       },

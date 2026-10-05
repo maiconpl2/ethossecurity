@@ -193,9 +193,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(sum('mcpServers' in p for p in market['plugins']), 1)
         self.assertFalse((repo / 'skills').exists())
         # Isolated interpreter, no console-script trampoline: the session project (cwd) never shadows ethossecurity, yaml
-        # or mcp, and no Scripts/ethos-sec.exe stays locked in the shared venv while another session runs.
-        args = next(p for p in market['plugins'] if 'mcpServers' in p)['mcpServers']['ethossecurity']['args']
+        # or mcp. "uv run --isolated" gives every session its own ephemeral environment from uv's cache: no shared venv
+        # that a running session keeps locked during an update, or that an uninstall leaves half deleted.
+        server = next(p for p in market['plugins'] if 'mcpServers' in p)['mcpServers']['ethossecurity']
+        args = server['args']
+        self.assertIn('--isolated', args[:args.index('--project')])
+        self.assertNotIn('UV_PROJECT_ENVIRONMENT', server.get('env', {}))
         self.assertEqual(args[args.index('${CLAUDE_PLUGIN_ROOT}') + 1:], ['python', '-I', '-m', 'ethossecurity.cli', 'mcp'])
+        from ethossecurity import __version__
+        self.assertEqual({p['version'] for p in market['plugins']}, {__version__})
 
     def test_semgrep_preparation_never_inherits_stdin(self):
         from ethossecurity import prepare
