@@ -127,11 +127,13 @@ def semgrep_install(root, version):
     environment.pop('PYTHONPATH', None)
     environment.pop('PYTHONHOME', None)
     # Never inherit stdio: under MCP, a child sharing the server's pending stdin pipe hangs on Windows.
-    subprocess.run([str(python), '-m', 'ensurepip', '--upgrade', '--default-pip'], check=True, timeout=600, env=environment,
-                   stdin=subprocess.DEVNULL, stdout=sys.stderr)
-    subprocess.run([str(python), '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', '--index-url',
+    # Isolated mode and the managed folder as cwd: "-m" would otherwise import a project's ensurepip/ or pip/ package
+    # (the MCP server's cwd is the session project) ahead of the standard library.
+    subprocess.run([str(python), '-I', '-m', 'ensurepip', '--upgrade', '--default-pip'], check=True, timeout=600, env=environment,
+                   cwd=str(folder), stdin=subprocess.DEVNULL, stdout=sys.stderr)
+    subprocess.run([str(python), '-I', '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', '--index-url',
                     'https://pypi.org/simple', 'semgrep==' + version], check=True, timeout=1200, env=environment,
-                   stdin=subprocess.DEVNULL, stdout=sys.stderr)  # stdout carries the MCP stdio protocol
+                   cwd=str(folder), stdin=subprocess.DEVNULL, stdout=sys.stderr)  # stdout carries the MCP stdio protocol
     if not executable.is_file():
         raise ValueError('Semgrep entrypoint was not installed')
     write_json(receipt, {'version': version, 'source': 'https://pypi.org/project/semgrep/' + version + '/'})
@@ -152,8 +154,9 @@ def prepare(root, names=('semgrep', 'trivy', 'gitleaks', 'osv')):
         record = {'scanner': name}
         try:
             path = semgrep_install(root, manifest['semgrep']['version']) if name == 'semgrep' else binary_install(root, name, manifest['binaries'][name], platform_key())
-            # Version probes execute only the verified managed binaries and never project builds.
-            probe = subprocess.run([path, '--version' if name != 'gitleaks' else 'version'],
+            # Version probes execute only the verified managed binaries and never project builds. The managed folder is
+            # the cwd: semgrep resolves pysemgrep from its cwd first on Windows, and the MCP server's cwd is the project.
+            probe = subprocess.run([path, '--version' if name != 'gitleaks' else 'version'], cwd=str(Path(path).parent),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
             if probe.returncode != 0:
                 raise ValueError('Installed scanner did not pass its version probe')

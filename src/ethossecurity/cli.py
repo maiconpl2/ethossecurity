@@ -1,11 +1,14 @@
 import argparse
 import json
+import os
 from pathlib import Path
 from jsonschema.exceptions import ValidationError
 from .core import config, scan, exit_code, PROFILES
 from .findings import normalize
 
 def main():
+    # Windows executable lookups (shutil.which, inherited by children) must not search the cwd, often the scanned project.
+    os.environ.setdefault('NoDefaultCurrentDirectoryInExePath', '1')
     parser = argparse.ArgumentParser(prog='ethos-sec')
     sub = parser.add_subparsers(dest='command', required=True)
     s = sub.add_parser('scan'); s.add_argument('root'); s.add_argument('--profile', choices=PROFILES, default='full-scan')

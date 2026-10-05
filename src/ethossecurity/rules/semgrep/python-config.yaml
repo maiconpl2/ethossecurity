@@ -36,6 +36,133 @@ rules:
       - pattern-not-inside: |
           yaml = $OBJECT(...)
           ...
+      # Functions holding a source of ethos.python.yaml-load-from-request (ERROR) are left to it. A
+      # route decorator alone is not enough: FastAPI typed parameters and Flask view arguments are
+      # not sources there, so this rule still reports them.
+      - pattern-not-inside: |
+          def $FN(..., request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $REQ: Request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $UPLOAD: UploadFile, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $UPLOAD: UploadFile = $DEFAULT, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... flask.request ...>
+            ...
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                def $FN(...):
+                  ...
+                  <... request.$ATTR ...>
+                  ...
+            - metavariable-regex:
+                metavariable: $ATTR
+                regex: ^(body|FILES|POST|GET|COOKIES|data|query_params|headers|META)$
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... self.request ...>
+            ...
+    metadata:
+      cwe: ["CWE-502"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+
+  # Same impact as pickle-from-request (code execution), so request data reaching an unsafe
+  # PyYAML loader is ERROR. The sources mirror ethos.python.pickle-from-request, plus
+  # query_params/headers/META and self.request (class-based views): ethos.python.yaml-unsafe-load
+  # leaves every function holding one of them to this rule.
+  - id: ethos.python.yaml-load-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Data from the HTTP request reaches PyYAML with an unsafe loader (or with no Loader, which
+      is unsafe on older PyYAML versions). A crafted YAML document can build arbitrary Python
+      objects and run code on the server. Use yaml.safe_load(...) or
+      yaml.load(..., Loader=yaml.SafeLoader).
+    paths:
+      exclude: ["tests/", "test/", "test_*.py", "*_test.py", "conftest.py"]
+    mode: taint
+    pattern-sources:
+      # Flask
+      - pattern: flask.request.$ATTR
+      # Django / Django REST framework
+      - patterns:
+          - pattern: $R.$ATTR
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|self\.request)$
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(body|FILES|POST|GET|COOKIES|data|query_params|headers|META)$
+      # FastAPI / Starlette: Request and UploadFile parameters
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async def $HANDLER(..., $REQ: Request, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $REQ: Request, ...):
+                    ...
+          - pattern-either:
+              - pattern: $REQ.body()
+              - pattern: $REQ.form()
+              - pattern: $REQ.cookies
+              - pattern: $REQ.headers
+              - pattern: $REQ.query_params
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async def $HANDLER(..., $UPLOAD: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  async def $HANDLER(..., $UPLOAD: UploadFile = $DEFAULT, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $UPLOAD: UploadFile, ...):
+                    ...
+              - pattern-inside: |
+                  def $HANDLER(..., $UPLOAD: UploadFile = $DEFAULT, ...):
+                    ...
+          - pattern-either:
+              - pattern: $UPLOAD.read()
+              - pattern: $UPLOAD.file
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: yaml.unsafe_load($DATA, ...)
+              - pattern: yaml.unsafe_load_all($DATA, ...)
+              - pattern: yaml.load($DATA)
+              - pattern: yaml.load_all($DATA)
+              - patterns:
+                  - pattern-either:
+                      - pattern: yaml.$LOAD($DATA, Loader=$LOADER, ...)
+                      - pattern: yaml.$LOAD($DATA, $LOADER, ...)
+                  - metavariable-regex:
+                      metavariable: $LOAD
+                      regex: ^(load|load_all)$
+                  - metavariable-pattern:
+                      metavariable: $LOADER
+                      pattern-either:
+                        - pattern: yaml.Loader
+                        - pattern: yaml.UnsafeLoader
+                        - pattern: yaml.CLoader
+                        - pattern: yaml.CUnsafeLoader
+          - pattern-not-inside: |
+              yaml = $OBJECT(...)
+              ...
+          - focus-metavariable: $DATA
     metadata:
       cwe: ["CWE-502"]
       owasp: ["A08:2021 - Software and Data Integrity Failures"]
@@ -656,6 +783,23 @@ rules:
       - pattern-not-inside: random.choices(..., weights=$WEIGHTS, ...)
       - pattern-not-inside: random.choices(..., cum_weights=$WEIGHTS, ...)
       - pattern-not-inside: $SEP.join(<... random.choices(..., weights=$WEIGHTS, ...) ...>)
+      # One index or element picked from a sequence (sampling a vocabulary token, masking a position)
+      # is random.choice(seq), which is not reported either. Only when it is the whole right-hand
+      # side: in a join, a comprehension or password = password + chars[...] it builds a string.
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: random.randint(0, len($SEQ) - 1)
+                - pattern: random.randrange(len($SEQ))
+                - pattern: random.randrange(0, len($SEQ))
+            - pattern-either:
+                - pattern-inside: $LHS = random.$INDEXFN(...)
+                - pattern-inside: $LHS = $ARR[random.$INDEXFN(...)]
+      # A coin flip (mask this token with 15% probability) is a decision, not a value.
+      - pattern-not-inside: random.random() < $P
+      - pattern-not-inside: random.random() <= $P
+      - pattern-not-inside: random.random() > $P
+      - pattern-not-inside: random.random() >= $P
       - pattern-either:
           - patterns:
               - pattern-either:

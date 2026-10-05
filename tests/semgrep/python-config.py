@@ -40,15 +40,69 @@ def load_config(path: str) -> dict:
         return yaml.load(fh, Loader=yaml.Loader)
 
 
+def parse_manifest(text: str) -> dict:
+    # ruleid: ethos.python.yaml-unsafe-load
+    return yaml.unsafe_load(text)
+
+
 def import_pipeline():
+    # request data: reported once, by ethos.python.yaml-load-from-request
     raw = request.get_data(as_text=True)
-    # ruleid: ethos.python.yaml-unsafe-load
+    # ruleid: ethos.python.yaml-load-from-request
     data = yaml.unsafe_load(raw)
-    # ruleid: ethos.python.yaml-unsafe-load
+    # ruleid: ethos.python.yaml-load-from-request
     docs = list(yaml.load_all(raw, Loader))
-    # ruleid: ethos.python.yaml-unsafe-load
+    # ruleid: ethos.python.yaml-load-from-request
     legacy = yaml.load(raw)
     return data, docs, legacy
+
+
+@app.route("/pipelines", methods=["POST"])
+def create_pipeline():
+    # ruleid: ethos.python.yaml-load-from-request
+    spec = yaml.load(request.data, Loader=yaml.Loader)
+    # ok: ethos.python.yaml-load-from-request
+    safe = yaml.safe_load(request.data)
+    # ok: ethos.python.yaml-load-from-request
+    also_safe = yaml.load(request.data, Loader=yaml.SafeLoader)
+    return jsonify({**spec, **safe, **also_safe})
+
+
+@app.route("/pipelines/upload", methods=["POST"])
+def upload_pipeline():
+    content = request.files["spec"].read()
+    # ruleid: ethos.python.yaml-load-from-request
+    return jsonify(list(yaml.unsafe_load_all(content)))
+
+
+@fastapi_app.post("/pipelines/import")
+async def import_pipeline_file(file: UploadFile = File(...)):
+    # ruleid: ethos.python.yaml-load-from-request
+    return yaml.load(await file.read())
+
+
+# Typed FastAPI parameters and Flask view arguments are not taint sources of
+# yaml-load-from-request, so a route decorator alone must not silence yaml-unsafe-load.
+@fastapi_app.post("/pipelines/text")
+def import_pipeline_text(spec: str):
+    # ruleid: ethos.python.yaml-unsafe-load
+    return yaml.load(spec, Loader=yaml.Loader)
+
+
+@app.route("/pipelines/<path:spec>")
+def import_pipeline_path(spec):
+    # ruleid: ethos.python.yaml-unsafe-load
+    return yaml.unsafe_load(spec)
+
+
+class PipelineImportView:
+    def post(self, *args, **kwargs):
+        # ruleid: ethos.python.yaml-load-from-request
+        return yaml.load(self.request.body, Loader=yaml.Loader)
+
+    def get(self, request):
+        # ruleid: ethos.python.yaml-load-from-request
+        return yaml.unsafe_load(request.query_params["spec"])
 
 
 def load_config_safely(path: str) -> dict:
@@ -635,6 +689,32 @@ def sample_next_token(vocab, probs):
     next_token = random.choices(vocab, weights=probs, k=1)[0]
     # ok: ethos.python.insecure-random-secret
     return random.choices(vocab, weights=probs)[0] if next_token else None
+
+
+def mask_tokens(tokens, vocab, tok):
+    # ok: ethos.python.insecure-random-secret
+    random_token = random.randint(0, len(tokens) - 1)
+    # ok: ethos.python.insecure-random-secret
+    new_token = vocab[random.randrange(len(vocab))]
+    # ok: ethos.python.insecure-random-secret
+    masked_token = "[MASK]" if random.random() < 0.15 else tok
+    return random_token, new_token, masked_token
+
+
+def make_temp_password(alphabet: str) -> str:
+    # ruleid: ethos.python.insecure-random-secret
+    password = "".join(alphabet[random.randint(0, len(alphabet) - 1)] for _ in range(12))
+    # ruleid: ethos.python.insecure-random-secret
+    pin_code = [alphabet[random.randrange(len(alphabet))] for _ in range(6)]
+    return password + "".join(pin_code)
+
+
+def make_reset_password(alphabet: str) -> str:
+    reset_password = ""
+    for _ in range(12):
+        # ruleid: ethos.python.insecure-random-secret
+        reset_password = reset_password + alphabet[random.randrange(len(alphabet))]
+    return reset_password
 
 
 # ---------------------------------------------------------------------------

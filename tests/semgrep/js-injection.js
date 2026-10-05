@@ -599,4 +599,39 @@ app.get("/return", (req, res) => {
   res.redirect(`${returnUrl}/done`);
 });
 
+// req.query values can be arrays, so the startsWith check often follows a typeof guard.
+app.get("/after-login", (req, res) => {
+  const target = req.query.target;
+  if (typeof target === "string" && target.startsWith("/") && !target.startsWith("//")) {
+    // ok: ethos.js.open-redirect-from-request
+    return res.redirect(target);
+  }
+  res.redirect("/");
+});
+
+app.get("/switch-account", (req, res) => {
+  const next = req.query.next;
+  if (typeof next !== "string" || !next.startsWith("/") || next.startsWith("//")) return res.redirect("/");
+  // ok: ethos.js.open-redirect-from-request
+  res.redirect(next);
+});
+
+app.get("/goto", (req, res) => {
+  const dest = req.query.dest;
+  if (typeof dest === "string" && !dest.startsWith("/")) {
+    // ruleid: ethos.js.open-redirect-from-request
+    return res.redirect(dest);
+  }
+  res.redirect("/");
+});
+
+app.get("/jump", (req, res) => {
+  const dest = req.query.dest;
+  if (typeof dest === "string" && dest.length > 0) {
+    // ruleid: ethos.js.open-redirect-from-request
+    return res.redirect(dest);
+  }
+  res.redirect("/");
+});
+
 module.exports = { app, evaluateRule, loadPlugin, legacyPoll, parseLegacyJson, convertVideo, compressFolder, run, runInShell, touchUpload };

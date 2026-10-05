@@ -411,3 +411,28 @@ export function generateRoomCode() {
   // ok: ethos.js.insecure-random-secret
   return Math.random().toString(36).slice(2, 7).toUpperCase();
 }
+
+// LLM demo: sampling one vocabulary token or a random index is not generating a secret.
+export function TokenSampler({ candidates, vocab, tokens }) {
+  // ok: ethos.js.insecure-random-secret
+  const sampledToken = candidates[Math.floor(Math.random() * candidates.length)];
+  // ok: ethos.js.insecure-random-secret
+  const randomToken = Math.floor(Math.random() * vocab.length);
+  // ok: ethos.js.insecure-random-secret
+  const maskedToken = Math.random() < 0.15 ? "[MASK]" : tokens[0];
+  // ok: ethos.js.insecure-random-secret
+  const step = { token: vocab[Math.floor(Math.random() * vocab.length)], index: randomToken };
+  return <p data-step={step.index}>{sampledToken} {maskedToken} {step.token}</p>;
+}
+
+export function InviteLink({ alphabet }) {
+  // Strings built from many random picks are still secrets.
+  // ruleid: ethos.js.insecure-random-secret
+  const inviteToken = Array.from({ length: 24 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  let password = "";
+  for (let i = 0; i < 16; i++) {
+    // ruleid: ethos.js.insecure-random-secret
+    password += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return <a href={`/invite/${inviteToken}`} data-p={password}>Invite</a>;
+}

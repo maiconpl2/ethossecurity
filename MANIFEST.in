@@ -6,6 +6,7 @@ recursive-include adapters *.json *.toml
 recursive-include docs *.md
 recursive-include examples *.yaml
 recursive-include tests *.py
+graft tests/semgrep
 include .github/workflows/ci.yml
 
 include EVALUATION.md EVALUATION.en.md

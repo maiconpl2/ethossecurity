@@ -109,6 +109,26 @@ app.get("/docs/:slug", (c) => {
   return c.redirect(`/guides/${c.req.param("slug")}`, 301);
 });
 
+const RETURN_PATHS = ["/dashboard", "/billing"];
+
+app.get("/auth/done", (c) => {
+  const next = c.req.query("next");
+  if (next && RETURN_PATHS.includes(next)) {
+    // ok: ethos.js.open-redirect-from-request
+    return c.redirect(next);
+  }
+  return c.redirect("/");
+});
+
+app.get("/auth/back", (c) => {
+  const back = c.req.query("back");
+  if (back && back.length < 200) {
+    // ruleid: ethos.js.open-redirect-from-request
+    return c.redirect(back);
+  }
+  return c.redirect("/");
+});
+
 const OPERATIONS: Record<string, (a: number, b: number) => number> = {
   add: (a, b) => a + b,
   multiply: (a, b) => a * b,

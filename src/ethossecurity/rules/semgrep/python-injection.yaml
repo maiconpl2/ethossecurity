@@ -126,8 +126,9 @@ rules:
     severity: ERROR
     message: >-
       Data from the HTTP request reaches a shell command (os.system, os.popen,
-      subprocess.getoutput, asyncio.create_subprocess_shell or an SSH
-      exec_command), which lets a caller run arbitrary commands on the server.
+      subprocess.getoutput, subprocess with shell=True,
+      asyncio.create_subprocess_shell or an SSH exec_command), which lets a
+      caller run arbitrary commands on the server.
       Pass an argument list to subprocess.run([...]) without a shell and
       validate the value against an allowlist.
     metadata:
@@ -305,7 +306,7 @@ rules:
               - pattern: float($ARG, ...)
           - metavariable-regex:
               metavariable: $ARG
-              regex: (?s)^(?!.*\b(?:system|popen|getoutput|getstatusoutput|create_subprocess_shell|exec_command)\s*\()
+              regex: (?s)^(?!.*\b(?:system|popen|getoutput|getstatusoutput|create_subprocess_shell|exec_command)\s*\()(?!.*\bshell\s*=\s*True)
       # lookup in a constant allowlist: COMMANDS[action], TEMPLATES.get(name)
       - patterns:
           - pattern-either:
@@ -374,6 +375,8 @@ rules:
               - pattern: asyncio.create_subprocess_shell($CMD, ...)
               # paramiko: the command runs in the remote user's shell
               - pattern: $SSH.exec_command($CMD, ...)
+              - pattern: subprocess.$FUNC($CMD, ..., shell=True, ...)
+              - pattern: subprocess.$FUNC(..., args=$CMD, ..., shell=True, ...)
           - focus-metavariable: $CMD
 
   # ------------------------------------------------------------ Code injection
@@ -1371,6 +1374,7 @@ rules:
           - focus-metavariable: $V
       - pattern: werkzeug.utils.secure_filename(...)
       - pattern: werkzeug.secure_filename(...)
+      - pattern: werkzeug.utils.safe_join(...)
       - pattern: werkzeug.security.safe_join(...)
       - pattern: flask.safe_join(...)
       - pattern: os.path.basename(...)
@@ -1687,6 +1691,18 @@ rules:
           - metavariable-regex:
               metavariable: $URL
               regex: ^[rR]?[fF]?[rR]?["'][a-zA-Z][a-zA-Z0-9+.-]*://[^/"'{}%]+/
+      # relative URL whose first character after "/" is literal (client created with base_url): only
+      # "//host" or "/\host" can change the host, so f"/users/{name}" is safe but f"/{name}" is not
+      - patterns:
+          - pattern: $URL
+          - pattern-either:
+              - pattern: f"..."
+              - pattern: '"..." + $Y'
+              - pattern: '"..." % $Y'
+              - pattern: '"...".format(...)'
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^[rR]?[fF]?[rR]?["']/[^/\\{}"'%]
       # URL that starts with a constant or configured base (BASE_URL, settings.API_URL, self.base_url)
       - patterns:
           - pattern: $URL
@@ -2225,3 +2241,256 @@ rules:
       - pattern-not: $F(<... nh3.clean(...) ...>)
       - pattern-not: $F(<... flask.render_template(...) ...>)
       - pattern-not: $F(<... django.template.loader.render_to_string(...) ...>)
+
+  # --------------------------------------------------- XSS: reflected response
+  - id: ethos.python.reflected-xss-from-request
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A value from the request URL or a submitted form is written into an HTML
+      response without escaping, so a crafted link or form can run JavaScript in
+      the visitor's browser (reflected cross-site scripting). Render it with
+      render_template (Jinja escapes by default), escape it with
+      markupsafe.escape / html.escape, or return JSON (jsonify / JSONResponse).
+    metadata:
+      cwe: ["CWE-79"]
+      owasp: ["A03:2021 - Injection"]
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    # Like ethos.js.reflected-xss-from-request, only values an attacker can put in a link or a
+    # cross-site form are sources: JSON bodies, headers and cookies are not.
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.args
+          - pattern: flask.request.form
+          - pattern: flask.request.values
+          - pattern: flask.request.view_args
+      # Django / DRF / Starlette request objects
+      - patterns:
+          - pattern-either:
+              - pattern: $R.GET
+              - pattern: $R.POST
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(request|req|self\.request)$
+      - patterns:
+          - pattern-inside: |
+              def $FN(..., $R: Request, ...):
+                ...
+          - pattern-either:
+              - pattern: $R.query_params
+              - pattern: $R.path_params
+      # Flask view arguments with a string/path converter: @app.route("/hello/<name>")
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE($PATH, ...)
+              def $FN(..., $P, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete)$
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: .*<(string:|path:)?\w+>
+          - pattern: $P
+      # FastAPI path/query parameters declared as str
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Optional[str] = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: str | None = $D, ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...], ...):
+                    ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FN(..., $P: Annotated[str, ...] = $D, ...):
+                    ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(get|post|put|patch|delete|api_route)$
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Depends(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: $T = Security(...), ...):
+                ...
+          - pattern-not-inside: |
+              def $FN(..., $P: Annotated[$T, Depends(...)], ...):
+                ...
+          - pattern: $P
+    pattern-sanitizers:
+      # Function and method calls end the flow (escape(), render_template(), jsonify(), redirect(),
+      # int(), a database lookup): their result is new data. String helpers keep propagating, and
+      # the response constructors stay open so the sinks below can see their arguments.
+      - patterns:
+          - pattern: $CALLEE(...)
+          - metavariable-regex:
+              metavariable: $CALLEE
+              regex: ^(?!(?:str|format|unquote|unquote_plus|make_response|Response|HTMLResponse|HttpResponse|HttpResponseBadRequest|HttpResponseForbidden|HttpResponseNotFound|HttpResponseServerError)$)\w+$
+      - patterns:
+          - pattern: $RECV.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?!(?:strip|lstrip|rstrip|lower|upper|title|capitalize|casefold|swapcase|replace|format|format_map|join|get|getlist|encode|decode|removeprefix|removesuffix|ljust|rjust|center|zfill|unquote|unquote_plus|make_response|Response|HTMLResponse|HttpResponse|HttpResponseBadRequest|HttpResponseForbidden|HttpResponseNotFound|HttpResponseServerError)$)\w+$
+      # .get()/.getlist() keep the value only on request mappings (request.args.get("q")); on other
+      # objects (requests.get(url), cache.get(key)) the result is new data
+      - patterns:
+          - pattern-either:
+              - pattern: $RECV.get(...)
+              - pattern: $RECV.getlist(...)
+          - metavariable-regex:
+              metavariable: $RECV
+              regex: ^(?!(?:\w+\.)*(?:args|form|values|view_args|GET|POST|query_params|path_params|params|query|data)$)
+      # request.args.get("page", 1, type=int) returns a number
+      - pattern: $X.get(..., type=int, ...)
+      - pattern: $X.get(..., type=float, ...)
+      # dicts and lists returned from a view are serialized as JSON
+      - pattern: "{$K: $V, ...}"
+      - pattern: "[$X, ...]"
+    pattern-sinks:
+      # A str returned from a Flask view is served as text/html, and so is one returned from a
+      # FastAPI/Starlette route declared with response_class=HTMLResponse.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.route(...)
+                  def $FN(...):
+                    ...
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $APP = flask.Flask(...)
+                          ...
+                      - pattern-inside: |
+                          $APP = flask.Blueprint(...)
+                          ...
+                  - pattern-inside: |
+                      @$APP.$ROUTE(...)
+                      def $FN(...):
+                        ...
+                  - metavariable-regex:
+                      metavariable: $ROUTE
+                      regex: ^(get|post|put|patch|delete)$
+              - patterns:
+                  - pattern-inside: |
+                      @$APP.$ROUTE(..., response_class=$RC, ...)
+                      def $FN(...):
+                        ...
+                  - metavariable-regex:
+                      metavariable: $RC
+                      regex: ^(?:[\w.]+\.)?HTMLResponse$
+          - pattern-either:
+              - pattern: return $SINK
+              - pattern: return $SINK, ...
+          # response objects are judged by the sinks below
+          - metavariable-regex:
+              metavariable: $SINK
+              regex: ^(?!(?:[\w.]+\.)?(?:make_response|Response|HTMLResponse|HttpResponse\w*)\()
+          - pattern-not:
+              patterns:
+                - pattern-inside: |
+                    $V = $RESP(...)
+                    ...
+                - pattern-either:
+                    - pattern: return $V
+                    - pattern: return $V, ...
+                - metavariable-regex:
+                    metavariable: $RESP
+                    regex: ^(?:[\w.]+\.)?(?:make_response|Response|HTMLResponse|HttpResponse\w*)$
+          # (body, headers) and (body, status, headers) tuples that set a non-HTML Content-Type
+          - pattern-not:
+              patterns:
+                - pattern-either:
+                    - pattern: 'return $X, {..., $HK: $HV, ...}'
+                    - pattern: 'return $X, $STATUS, {..., $HK: $HV, ...}'
+                - metavariable-regex:
+                    metavariable: $HK
+                    regex: (?i)^["']content-type["']$
+                - metavariable-regex:
+                    metavariable: $HV
+                    regex: ^["'](?!.*html)
+          - focus-metavariable: $SINK
+      # Flask/Werkzeug responses default to text/html unless another type is set
+      - patterns:
+          - pattern-either:
+              - pattern: flask.make_response($SINK, ...)
+              - pattern: flask.Response($SINK, ...)
+              - pattern: flask.Response(..., response=$SINK, ...)
+              - pattern: werkzeug.wrappers.Response($SINK, ...)
+              - pattern: werkzeug.wrappers.Response(..., response=$SINK, ...)
+          - pattern-not: $F(..., mimetype="=~/^(?!.*html)/", ...)
+          - pattern-not: $F(..., content_type="=~/^(?!.*html)/", ...)
+          - pattern-not:
+              patterns:
+                - pattern-either:
+                    - pattern: '$F(..., {..., $HK: $HV, ...}, ...)'
+                    - pattern: '$F(..., headers={..., $HK: $HV, ...}, ...)'
+                - metavariable-regex:
+                    metavariable: $HK
+                    regex: (?i)^["']content-type["']$
+                - metavariable-regex:
+                    metavariable: $HV
+                    regex: ^["'](?!.*html)
+          - pattern-not-inside: |
+              $RESP = $F(...)
+              ...
+              $RESP.mimetype = "=~/^(?!.*html)/"
+          - pattern-not-inside: |
+              $RESP = $F(...)
+              ...
+              $RESP.content_type = "=~/^(?!.*html)/"
+          - pattern-not-inside: |
+              $RESP = $F(...)
+              ...
+              $RESP.headers["=~/(?i)^content-type$/"] = "=~/^(?!.*html)/"
+          - focus-metavariable: $SINK
+      # FastAPI / Starlette
+      - patterns:
+          - pattern-either:
+              - pattern: fastapi.responses.HTMLResponse($SINK, ...)
+              - pattern: fastapi.responses.HTMLResponse(..., content=$SINK, ...)
+              - pattern: starlette.responses.HTMLResponse($SINK, ...)
+              - pattern: starlette.responses.HTMLResponse(..., content=$SINK, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: fastapi.Response($SINK, ...)
+                      - pattern: fastapi.Response(..., content=$SINK, ...)
+                      - pattern: fastapi.responses.Response($SINK, ...)
+                      - pattern: fastapi.responses.Response(..., content=$SINK, ...)
+                      - pattern: starlette.responses.Response($SINK, ...)
+                      - pattern: starlette.responses.Response(..., content=$SINK, ...)
+                  - pattern: $F(..., media_type="=~/html/", ...)
+          - focus-metavariable: $SINK
+      # Django: HttpResponse is text/html unless another content_type is given
+      - patterns:
+          - pattern-either:
+              - pattern: django.http.HttpResponse($SINK, ...)
+              - pattern: django.http.HttpResponse(..., content=$SINK, ...)
+              - pattern: django.http.HttpResponseBadRequest($SINK, ...)
+              - pattern: django.http.HttpResponseForbidden($SINK, ...)
+              - pattern: django.http.HttpResponseNotFound($SINK, ...)
+              - pattern: django.http.HttpResponseServerError($SINK, ...)
+          - pattern-not: $F(..., content_type="=~/^(?!.*html)/", ...)
+          # content_type is also the second positional parameter
+          - pattern-not: $F($BODY, "=~/^(?!.*html)/", ...)
+          - focus-metavariable: $SINK

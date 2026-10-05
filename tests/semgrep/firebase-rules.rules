@@ -214,3 +214,55 @@ service cloud.firestore {
     }
   }
 }
+
+// Firestore rules with conditions split over several lines (firestore.rules of a booking app)
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{userId} {
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow write: if request.auth != null
+        && request.auth.uid == userId;
+      // ok: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow delete: if isSignedIn() // owner only
+        && request.auth.uid == userId;
+      // ruleid: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow update: if request.auth != null
+        || request.auth.token.admin == true;
+    }
+
+    match /members/{memberId} {
+      // ruleid: ethos.generic.firebase-rules-user-doc-any-signed-in-user
+      allow write: if request.auth != null
+      ////////////////////////////////////////////////////////////////////////
+      // Fields below are maintained by Cloud Functions.
+      ////////////////////////////////////////////////////////////////////////
+    }
+
+    match /settings/{docId} {
+      // ok: ethos.generic.firebase-rules-test-mode
+      allow write: if request.time < timestamp.date(2030, 1, 1)
+        && request.auth.token.admin == true;
+      // ruleid: ethos.generic.firebase-rules-test-mode
+      allow read: if request.time < timestamp.date(2030, 1, 1)
+        || request.auth.token.admin == true;
+      // ok: ethos.generic.firebase-rules-public-write
+      allow update: if true
+        && request.auth != null;
+    }
+
+    match /{document=**} {
+      // ok: ethos.generic.firebase-rules-any-signed-in-user
+      allow read: if request.auth != null
+
+        // admins only
+        && request.auth.token.admin == true;
+      // ruleid: ethos.generic.firebase-rules-any-signed-in-user
+      allow write: if isSignedIn()
+        || request.auth.token.admin == true;
+    }
+  }
+}

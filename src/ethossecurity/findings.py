@@ -102,4 +102,18 @@ def normalize(source, data, root=None):
                         recommendation=r.get('solution')))
     else:
         raise ValueError('Unknown scanner')
-    return list({f['id']: f for f in out}.values())
+    out = list({f['id']: f for f in out}.values())
+    return collapse(out) if source == 'semgrep' else out
+
+def collapse(found):
+    # Several Semgrep rules can flag one weakness on one line (a tainted-source rule and a generic sink rule): keep only
+    # the most severe finding per file, line and shared CWE. Other scanners report distinct facts and are never merged.
+    rank = lambda f: SEVERITIES.index(f['severity']) if f['severity'] in SEVERITIES else -1
+    kept = {}
+    for f in sorted(found, key=rank, reverse=True):
+        cwes = set(re.findall(r'CWE-\d+', ' '.join(f['cwe']).upper()))
+        group = kept.setdefault((f['file'], f['line']), [])
+        if not any(cwes & other for other, _ in group):
+            group.append((cwes, f))
+    keep = {id(f) for group in kept.values() for _, f in group}
+    return [f for f in found if id(f) in keep]

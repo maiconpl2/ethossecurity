@@ -1313,6 +1313,21 @@ rules:
           - pattern-not: $LIST.includes($OBJ.$PROP)
           - pattern-not: $LIST.has($OBJ.$PROP)
           - focus-metavariable: $X
+      # The same checks after a guard on the value, e.g. typeof next === "string" && next.startsWith("/").
+      # A check in the right operand of && or || is not always evaluated, so the side effect is anchored on
+      # the guard; || only counts a negated check (the early-return form).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: <... $X ...> && $X.startsWith(...)
+              - pattern: <... $X ...> && $LIST.includes($X)
+              - pattern: <... $X ...> && $LIST.has($X)
+              - pattern: <... $X ...> && $RE.test($X)
+              - pattern: <... $X ...> || !$X.startsWith(...)
+              - pattern: <... $X ...> || !$LIST.includes($X)
+              - pattern: <... $X ...> || !$LIST.has($X)
+              - pattern: <... $X ...> || !$RE.test($X)
+          - focus-metavariable: $X
       - by-side-effect: true
         patterns:
           - pattern-either:

@@ -1058,6 +1058,11 @@ rules:
         - "**/__mocks__/**"
     patterns:
       - pattern: Math.random()
+      # A coin flip (Math.random() < 0.15 ? "[MASK]" : token) only chooses between values.
+      - pattern-not-inside: Math.random() < $P
+      - pattern-not-inside: Math.random() <= $P
+      - pattern-not-inside: Math.random() > $P
+      - pattern-not-inside: Math.random() >= $P
       - pattern-either:
           # A variable, property or object key with a secret-like name receives the random value.
           - patterns:
@@ -1067,10 +1072,15 @@ rules:
                   - pattern-inside: '{..., $NAME: <... Math.random() ...>, ...}'
               - pattern-not-inside: $NAME = (...) => {...}
               - pattern-not-inside: $NAME = function (...) {...}
+              # A random index, or one element picked from a list (LLM token sampling: sampledToken =
+              # vocab[...]), is not a generated secret; += and joins that build a string from picks still count.
+              - pattern-not-inside: $NAME = Math.floor(Math.random() * $ARR.length)
+              - pattern-not-inside: $NAME = $ARR[Math.floor(Math.random() * $ARR.length)]
+              - pattern-not-inside: '{..., $NAME: $ARR[Math.floor(Math.random() * $ARR.length)], ...}'
               # camelCase/snake_case aware; skips game/UI values such as secretNumber, tokenCount, passwordLength.
               - metavariable-regex:
                   metavariable: $NAME
-                  regex: '(?!.*(?i:count|number|length|size|index|width|height|delay|duration|timeout|interval|colou?r|position|offset|limit|score|weight|chance|probability|speed|angle|opacity|guess|(?<!pass)word|dice|animation|jitter|retry|backoff))(?:code$|.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z]))(?i:token|secret|passw(?:or)?d|pass_?phrase|nonce|salt|otp|csrf|xsrf|api_?key|access_?key|private_?key|session_?(?:id|key)|jwt|(?:reset|verif(?:y|ication)|auth|invite|invitation|pin|confirm(?:ation)?|login|security|recovery|activation|magic|one_?time|sms|email)_?code)(?=$|[^a-z]))'
+                  regex: '(?!.*(?i:count|number|length|size|index|idx|width|height|delay|duration|timeout|interval|colou?r|position|offset|limit|score|weight|chance|probability|speed|angle|opacity|guess|(?<!pass)word|dice|animation|jitter|retry|backoff))(?:code$|.*?(?:^|(?<=[^a-zA-Z])|(?<=[a-z])(?=[A-Z]))(?i:token|secret|passw(?:or)?d|pass_?phrase|nonce|salt|otp|csrf|xsrf|api_?key|access_?key|private_?key|session_?(?:id|key)|jwt|(?:reset|verif(?:y|ication)|auth|invite|invitation|pin|confirm(?:ation)?|login|security|recovery|activation|magic|one_?time|sms|email)_?code)(?=$|[^a-z]))'
           # Inside a generator function such as generateToken(), createSessionId(), randomPassword(), genOtp().
           - patterns:
               - pattern-either:
@@ -1248,6 +1258,66 @@ rules:
       - metavariable-regex:
           metavariable: $...BODY
           regex: '(?s)(?!.*(?:[Vv]erif\w*|[Vv]alidate\w*(?:Token|Jwt|JWT|Session|Auth)\w*)\s*\()'
+
+  # ---------------------------------------------------------------------------
+  # JWT signed or verified with a string literal secret (jsonwebtoken, jose, express-jwt/koa-jwt).
+  # gitleaks rarely flags low-entropy values such as "dev-secret". Environment lookups, key files,
+  # variables and PEM public keys/certificates are not reported.
+  # ---------------------------------------------------------------------------
+  - id: ethos.js.hardcoded-jwt-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A JWT is signed or verified with a secret written directly in the code. Anyone with a copy of the code
+      can forge tokens and log in as any user. Load the secret from the environment or a secret manager (for
+      example process.env.JWT_SECRET, failing at startup when it is missing) and rotate the value that was
+      committed.
+    metadata:
+      cwe: ["CWE-798", "CWE-321"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    paths:
+      exclude:
+        - "*.test.*"
+        - "*.spec.*"
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $JWT.sign($PAYLOAD, $KEY, ...)
+                  - pattern: $JWT.verify($TOKEN, $KEY, ...)
+              - metavariable-regex:
+                  metavariable: $JWT
+                  regex: (?i)^(?:jwt|jsonwebtoken)$
+          # Named imports: import { sign, verify } from "jsonwebtoken".
+          - pattern: jsonwebtoken.sign($PAYLOAD, $KEY, ...)
+          - pattern: jsonwebtoken.verify($TOKEN, $KEY, ...)
+          - pattern: jwtVerify($TOKEN, $KEY, ...)
+          - pattern: $JOSE.jwtVerify($TOKEN, $KEY, ...)
+          - patterns:
+              - pattern: $BUILDER.sign($KEY, ...)
+              - metavariable-pattern:
+                  metavariable: $BUILDER
+                  pattern-either:
+                    - pattern: new SignJWT(...)
+                    - pattern: new $JOSE.SignJWT(...)
+          # express-jwt, koa-jwt (and hono/jwt) middleware options.
+          - patterns:
+              - pattern: '$MIDDLEWARE({..., secret: $KEY, ...})'
+              - metavariable-regex:
+                  metavariable: $MIDDLEWARE
+                  regex: (?i)^(?:(?:express|koa)_?jwt|jwt)$
+      # The whole key is one non-empty string literal, optionally wrapped in TextEncoder().encode() or
+      # Buffer.from(); a PEM public key or certificate is not a secret.
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '^(?:new\s+TextEncoder\(\)\s*\.encode\(|[\w$.]+\.encode\(|Buffer\.from\()?\s*(?!["'']\s*-----BEGIN [A-Z ]*(?:PUBLIC KEY|CERTIFICATE)-----)(?:"(?:[^"\\\r\n]|\\.)+"|''(?:[^''\\\r\n]|\\.)+'')\s*(?:,\s*["''][\w-]+["'']\s*)?\)?$'
+      - focus-metavariable: $KEY
 
   # ---------------------------------------------------------------------------
   # Session/auth cookies readable from JavaScript (httpOnly off or missing).

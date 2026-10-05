@@ -3,6 +3,10 @@ rules:
   # Each allow statement must start a line or follow "{" or ";", so commented-out examples are ignored.
   # Matches inside /* ... */ block comments are dropped; a "/*" inside a // line comment, or right after a
   # letter or quote (for example 'image/*' inside a string), does not open a comment.
+  # A line break (or a trailing // comment) ends a condition unless the next code line starts with "&&";
+  # a continuation with "||" is still reported, because the first operand alone already grants access.
+  # That check uses possessive quantifiers: comment banners such as "////////" would otherwise exhaust the
+  # regex backtracking limit, and Semgrep silently drops the match.
   - id: ethos.generic.firebase-rules-public-write
     languages: [generic]
     severity: ERROR
@@ -15,7 +19,7 @@ rules:
         - "*.rules"
     patterns:
       - pattern-regex: >-
-          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
       - focus-metavariable: $ALLOW
       - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
     metadata:
@@ -40,7 +44,7 @@ rules:
         - "*.rules"
     patterns:
       - pattern-regex: >-
-          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create)\s*,\s*)*create(?:\s*,\s*(?:read|get|list|create))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create)\s*,\s*)*create(?:\s*,\s*(?:read|get|list|create))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
       - focus-metavariable: $ALLOW
       - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
     metadata:
@@ -69,7 +73,7 @@ rules:
             ...
           }
       - pattern-regex: >-
-          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
       - focus-metavariable: $ALLOW
       - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
     metadata:
@@ -94,7 +98,7 @@ rules:
         - "*.rules"
     patterns:
       - pattern-regex: >-
-          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$))
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list)(?:\s*,\s*(?:read|get|list))*[ \t]*(?::\s*if\s+true[ \t]*)?(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
       - focus-metavariable: $ALLOW
       - pattern-not-inside: |
           match /{$WILDCARD=**} {
@@ -123,7 +127,7 @@ rules:
         - "*.rules"
     patterns:
       - pattern-regex: >-
-          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+request\.time\s*<=?\s*timestamp\.date\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)[ \t]*(?=;|\}|//|\r?$))
+          (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+request\.time\s*<=?\s*timestamp\.date\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)[ \t]*(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
       - focus-metavariable: $ALLOW
       - pattern-not-regex: (?s)//[^\n]*|(?<![\w'"])/\*.*?\*/
     metadata:
@@ -158,7 +162,7 @@ rules:
           }
       - pattern-either:
           - pattern-regex: >-
-              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$))
+              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
           - patterns:
               - pattern-either:
                   - pattern-inside: |
@@ -182,7 +186,7 @@ rules:
                       }
                       ...
               - pattern-regex: >-
-                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$))
+                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:read|get|list|create|write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
               - metavariable-comparison:
                   comparison: str($FN) == str($CALL)
       - focus-metavariable: $ALLOW
@@ -232,7 +236,7 @@ rules:
           }
       - pattern-either:
           - pattern-regex: >-
-              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$))
+              (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?:request\.auth(?:\.uid)?\s*!=\s*null|null\s*!=\s*request\.auth(?:\.uid)?)[ \t]*(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
           - patterns:
               - pattern-either:
                   - pattern-inside: |
@@ -256,7 +260,7 @@ rules:
                       }
                       ...
               - pattern-regex: >-
-                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$))
+                  (?m)(?:^|[{;])[ \t]*(?P<ALLOW>allow\s+(?:(?:read|get|list|create|write|update|delete)\s*,\s*)*(?:write|update|delete)(?:\s*,\s*(?:read|get|list|create|write|update|delete))*\s*:\s*if\s+(?P<CALL>\w+)\(\s*\)[ \t]*(?=;|\}|//|\r?$)(?!(?:\s*+//[^\n]*+)*+\s*&&))
               - metavariable-comparison:
                   comparison: str($FN) == str($CALL)
       - focus-metavariable: $ALLOW

@@ -3,6 +3,7 @@
 # They are never executed.
 import ast
 import asyncio
+import html
 import os
 import re
 import shlex
@@ -21,18 +22,21 @@ import requests
 from clickhouse_driver import Client as ClickHouseClient
 from django.core.files.storage import default_storage
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.views import View
 from fastapi import Depends, FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse
-from flask import Flask, abort, render_template_string, request, send_file, send_from_directory
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from flask import (
+    Flask, Response, abort, jsonify, make_response, render_template, render_template_string, request, send_file,
+    send_from_directory,
+)
 from jinja2.sandbox import SandboxedEnvironment
 from markupsafe import Markup, escape
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy import text
-from werkzeug.utils import secure_filename
+from werkzeug.utils import safe_join, secure_filename
 
 app = Flask(__name__)
 api = FastAPI()
@@ -192,6 +196,33 @@ def restart_job(job_id):
     # ok: ethos.python.os-command-from-request, ethos.python.os-command-dynamic
     os.system(f"systemctl restart worker@{job_id}")
     return {"ok": True}
+
+
+@app.route("/archive")
+def archive():
+    name = request.args.get("name", "")
+    # ruleid: ethos.python.os-command-from-request
+    subprocess.run(f"tar -czf /tmp/{name}.tgz /srv/data", shell=True, check=True)
+    return {"ok": True}
+
+
+@api.get("/grep/{pattern}")
+async def grep_logs(pattern: str):
+    # ruleid: ethos.python.os-command-from-request
+    out = subprocess.check_output("grep " + pattern + " /var/log/app.log", shell=True)
+    # ruleid: ethos.python.os-command-from-request
+    total = int(subprocess.check_output(args="wc -l < /var/log/" + pattern, shell=True))
+    return {"out": out, "lines": total}
+
+
+@app.route("/whois")
+def whois():
+    domain = request.args.get("domain", "")
+    # ok: ethos.python.os-command-from-request
+    out = subprocess.run(f"whois {shlex.quote(domain)}", shell=True, capture_output=True, text=True).stdout
+    # ok: ethos.python.os-command-from-request
+    dig = subprocess.run(["dig", domain], capture_output=True, text=True).stdout
+    return {"out": out, "dig": dig}
 
 
 # ------------------------------------------------------------ eval / exec (scripts)
@@ -646,6 +677,22 @@ async def thumbnail(name: str):
     return FileResponse(Path("thumbs") / Path(name).name)
 
 
+@app.route("/uploads/<name>")
+def serve_upload(name):
+    path = safe_join(UPLOAD_DIR, name)
+    if path is None:
+        abort(404)
+    # ok: ethos.python.path-traversal-from-request
+    return send_file(path)
+
+
+@app.route("/attachments")
+def attachment():
+    # ok: ethos.python.path-traversal-from-request
+    with open(safe_join(UPLOAD_DIR, "attachments", request.args["file"]), "rb") as fh:
+        return fh.read()
+
+
 # --------------------------------------------------------------------------- SSRF
 
 @app.route("/preview")
@@ -733,6 +780,38 @@ def partner_proxy():
         abort(400)
     # ok: ethos.python.ssrf-from-request
     return requests.get(url, timeout=5).content
+
+
+@api.get("/gh/{username}")
+async def github_user(username: str):
+    async with httpx.AsyncClient(base_url=API_BASE_URL) as client:
+        # ok: ethos.python.ssrf-from-request
+        r = await client.get(f"/users/{username}")
+    return r.json()
+
+
+@app.route("/gh/repos")
+def github_repos():
+    owner = request.args.get("owner", "")
+    client = httpx.Client(base_url=API_BASE_URL)
+    # ok: ethos.python.ssrf-from-request
+    return client.get("/repos/" + owner).json()
+
+
+@api.get("/relay/{path}")
+async def relay(path: str):
+    async with httpx.AsyncClient(base_url=API_BASE_URL) as client:
+        # "/" + "/evil.example/x" becomes the network-path reference "//evil.example/x"
+        # ruleid: ethos.python.ssrf-from-request
+        r = await client.get(f"/{path}")
+    return r.json()
+
+
+@app.route("/relay")
+def relay_query():
+    client = httpx.Client(base_url=API_BASE_URL)
+    # ruleid: ethos.python.ssrf-from-request
+    return client.get("/" + request.args["path"]).json()
 
 
 # ------------------------------------------------- Template injection (helpers)
@@ -831,3 +910,122 @@ def bold(value):
 def escaped_note(note):
     # ok: ethos.python.markup-unescaped-dynamic
     return Markup(f"<em>{escape(note)}</em>")
+
+
+# ------------------------------------------------------------- Reflected XSS
+
+@app.route("/hello")
+def hello_page():
+    name = request.args.get("name", "")
+    # ruleid: ethos.python.reflected-xss-from-request
+    return f"<h1>Hello {name}</h1>"
+
+
+@app.route("/search/results")
+def search_results():
+    q = request.args.get("q", "")
+    # ruleid: ethos.python.reflected-xss-from-request
+    return make_response("<p>No results for %s</p>" % q, 404)
+
+
+@app.post("/comments/preview")
+def preview_comment():
+    page = "<div class='comment'>{}</div>".format(request.form["text"])
+    # ruleid: ethos.python.reflected-xss-from-request
+    return page, 200
+
+
+@api.get("/welcome")
+async def welcome(name: str):
+    # ruleid: ethos.python.reflected-xss-from-request
+    return HTMLResponse(f"<h1>Welcome {name}</h1>")
+
+
+def django_search(request):
+    q = request.GET.get("q", "")
+    # ruleid: ethos.python.reflected-xss-from-request
+    return HttpResponse(f"<p>You searched for {q}</p>")
+
+
+@app.route("/hello/template")
+def hello_template():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return render_template("hello.html", name=name)
+
+
+@app.route("/hello/escaped")
+def hello_escaped():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return f"<h1>Hello {escape(name)}</h1>" + html.escape(request.args.get("title", ""))
+
+
+@app.route("/hello/json")
+def hello_json():
+    # ok: ethos.python.reflected-xss-from-request
+    return jsonify(name=request.args.get("name", ""))
+
+
+@app.route("/hello/plain")
+def hello_plain():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return Response(f"Hello {name}", mimetype="text/plain")
+
+
+@app.route("/hello/plain-headers")
+def hello_plain_headers():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    resp = make_response(f"Hello {name}")
+    resp.mimetype = "text/plain"
+    # ok: ethos.python.reflected-xss-from-request
+    return resp
+
+
+@api.get("/welcome/json")
+async def welcome_json(name: str):
+    # ok: ethos.python.reflected-xss-from-request
+    return JSONResponse({"welcome": name})
+
+
+@api.get("/welcome/text")
+async def welcome_text(name: str):
+    # FastAPI serializes a returned str as JSON
+    # ok: ethos.python.reflected-xss-from-request
+    return f"<h1>Welcome {name}</h1>"
+
+
+@app.route("/hello/page")
+def hello_page_number():
+    page = request.args.get("page", 1, type=int)
+    # ok: ethos.python.reflected-xss-from-request
+    return f"<p>Page {page}</p>"
+
+
+@app.route("/hello/tuple")
+def hello_tuple():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return f"Hello {name}", 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/hello/tuple-html")
+def hello_tuple_html():
+    name = request.args.get("name", "")
+    # ruleid: ethos.python.reflected-xss-from-request
+    return f"<h1>Hello {name}</h1>", 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/hello/headers")
+def hello_headers():
+    name = request.args.get("name", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return Response(f"Hello {name}", headers={"Content-Type": "text/plain"})
+
+
+def django_plain(request):
+    q = request.GET.get("q", "")
+    # ok: ethos.python.reflected-xss-from-request
+    return HttpResponse(f"You searched for {q}", "text/plain")

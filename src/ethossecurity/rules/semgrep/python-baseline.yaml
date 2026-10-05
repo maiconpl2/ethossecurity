@@ -11,11 +11,75 @@ rules:
     metadata:
       cwe: [CWE-396]
       category: bug
+  # Same split as ethos.python.os-command-dynamic: a constant command cannot be injected, and inside
+  # request handlers ethos.python.os-command-from-request (ERROR) decides, so one line never yields two findings.
   - id: ethos.python.shell-input
     languages: [python]
-    message: Shell execution requires validation of every interpolated value; prefer argv with shell disabled.
-    severity: ERROR
-    pattern: subprocess.$FUNC(..., shell=True, ...)
+    message: >-
+      A shell command is built from a non-literal value and run with shell=True, so an untrusted
+      part can inject extra commands. Pass an argument list with the shell disabled, or quote every
+      value with shlex.quote.
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: subprocess.$FUNC($CMD, ..., shell=True, ...)
+                  - pattern: subprocess.$FUNC(..., args=$CMD, ..., shell=True, ...)
+              - metavariable-regex:
+                  metavariable: $CMD
+                  regex: ^(?![rR]?[fF][rR]?["'])(?!(?:\w+\.)*[A-Z][A-Z0-9_]*$)(?!sys\.executable$)
+              - pattern-not: subprocess.$FUNC("...", ...)
+              - pattern-not: subprocess.$FUNC("..." if $COND else "...", ...)
+              - pattern-not: subprocess.$FUNC(..., args="...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: subprocess.$FUNC($CMD, ..., shell=True, ...)
+                  - pattern: subprocess.$FUNC(..., args=$CMD, ..., shell=True, ...)
+              - metavariable-pattern:
+                  metavariable: $CMD
+                  patterns:
+                    - pattern: f"...{$X}..."
+                    - metavariable-regex:
+                        metavariable: $X
+                        regex: ^(?!(?:\w+\.)*(?:[A-Z][A-Z0-9_]*|__\w+__)$|sys\.executable$|int\(|float\(|len\(|["'])
+      - pattern-not: subprocess.$FUNC(..., <... shlex.quote(...) ...>, ...)
+      - pattern-not: subprocess.$FUNC(..., <... shlex.join(...) ...>, ...)
+      - pattern-not-inside: |
+          $CMD = <... shlex.quote(...) ...>
+          ...
+      - pattern-not-inside: |
+          $CMD = <... shlex.join(...) ...>
+          ...
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                @$APP.$ROUTE(...)
+                def $FN(...):
+                  ...
+            - metavariable-regex:
+                metavariable: $ROUTE
+                regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+      - pattern-not-inside: |
+          def $FN(..., request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(..., $REQ: Request, ...):
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... flask.request ...>
+            ...
+      - pattern-not-inside: |
+          def $FN(...):
+            ...
+            <... self.request ...>
+            ...
     metadata:
       cwe: [CWE-78]
+      owasp: ["A03:2021 - Injection"]
       category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH

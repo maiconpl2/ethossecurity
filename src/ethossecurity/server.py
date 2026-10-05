@@ -1,6 +1,7 @@
 from pathlib import Path
 import hashlib
 import os
+import re
 import threading
 from mcp.server.fastmcp import FastMCP
 from .core import config, scan, PROFILES, GLOBAL_ROOT, GLOBAL_HOME
@@ -13,8 +14,10 @@ def workspace_root():
 def save_reports(root, report):
     from .prepare import write_json
     from .report import html_report
-    # Reports stay in the user's private folder; the scanned project is never modified.
-    folder = GLOBAL_HOME / 'reports' / (root.name + '-' + hashlib.sha256(str(root).encode()).hexdigest()[:8])
+    # Reports stay in the user's private folder; the scanned project is never modified. The folder name is short and
+    # portable (Windows MAX_PATH, reserved characters); the hash of the full path keeps it unique.
+    name = re.sub(r'[^A-Za-z0-9._-]+', '_', root.name)[:40]
+    folder = GLOBAL_HOME / 'reports' / (name + '-' + hashlib.sha256(str(root).encode()).hexdigest()[:8])
     write_json(folder / 'latest.json', report)
     return {'json': str(folder / 'latest.json'), 'html': html_report(report, folder / 'latest.html')}
 
@@ -40,7 +43,11 @@ def create_server(root=None, config_path=None):
             if not workspace:
                 return scan(root, profile, cfg)
             report = scan(root, profile, load())
-            report['report_files'] = save_reports(root, report)
+            try:
+                report['report_files'] = save_reports(root, report)
+            except OSError as error:
+                # A finished scan is still returned when its local copy cannot be written (disk full, permissions).
+                report['report_files'] = {'error': type(error).__name__ + ': report could not be saved under ~/.ethossecurity/reports'}
             return report
 
     @server.tool()
@@ -61,4 +68,6 @@ def create_server(root=None, config_path=None):
     return server
 
 def serve(root=None, config_path=None, http=False):
+    # Windows program lookups must not search the current directory (in plugin mode, the untrusted session project).
+    os.environ.setdefault('NoDefaultCurrentDirectoryInExePath', '1')
     create_server(root, config_path).run(transport='streamable-http' if http else 'stdio')

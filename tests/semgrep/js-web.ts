@@ -7,7 +7,7 @@ import session from "express-session";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
-import { jwtVerify, decodeJwt } from "jose";
+import { jwtVerify, decodeJwt, SignJWT } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { cors as honoCors } from "hono/cors";
@@ -21,6 +21,8 @@ import md5 from "md5";
 import mongoose from "mongoose";
 import { Hono } from "hono";
 import { setCookie } from "hono/cookie";
+import koaJwt from "koa-jwt";
+import { readFileSync } from "fs";
 
 const app = express();
 const hono = new Hono();
@@ -480,6 +482,73 @@ app.get("/profile", async (req: Request, res: Response) => {
   const { sub } = jwt.decode(token) as { sub: string };
   res.json({ sub });
 });
+
+// ---------------------------------------------------------------------------
+// ethos.js.hardcoded-jwt-secret
+// ---------------------------------------------------------------------------
+export function issueSessionToken(userId: string) {
+  // ruleid: ethos.js.hardcoded-jwt-secret
+  return jwt.sign({ sub: userId }, "dev-secret", { expiresIn: "1h" });
+}
+
+export function readSessionToken(token: string) {
+  // ruleid: ethos.js.hardcoded-jwt-secret
+  return jwt.verify(token, 'super-secret-key', { algorithms: ["HS256"] });
+}
+
+export function issueRefreshToken(userId: string) {
+  // ruleid: ethos.js.hardcoded-jwt-secret
+  return jwt.sign({ sub: userId }, Buffer.from("refresh-secret", "utf-8"));
+}
+
+export async function issueEdgeToken(userId: string) {
+  return new SignJWT({ sub: userId })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime("2h")
+    // ruleid: ethos.js.hardcoded-jwt-secret
+    .sign(new TextEncoder().encode("my-jose-secret"));
+}
+
+export async function readEdgeToken(token: string) {
+  // ruleid: ethos.js.hardcoded-jwt-secret
+  return jwtVerify(token, new TextEncoder().encode("my-jose-secret"), { algorithms: ["HS256"] });
+}
+
+// ruleid: ethos.js.hardcoded-jwt-secret
+app.use("/api", expressjwt({ secret: "shhhhh", algorithms: ["HS256"] }));
+
+// ruleid: ethos.js.hardcoded-jwt-secret
+koa.use(koaJwt({ secret: "koa-shared-secret" }));
+
+export function issueFromEnv(userId: string) {
+  // ok: ethos.js.hardcoded-jwt-secret
+  return jwt.sign({ sub: userId }, process.env.JWT_SECRET as string, { expiresIn: "1h" });
+}
+
+export function issueWithKeyFile(userId: string) {
+  // ok: ethos.js.hardcoded-jwt-secret
+  return jwt.sign({ sub: userId }, readFileSync("keys/private.pem"), { algorithm: "RS256" });
+}
+
+export function verifyWithPublicKey(token: string) {
+  // ok: ethos.js.hardcoded-jwt-secret
+  return jwt.verify(token, "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1L\n-----END PUBLIC KEY-----", { algorithms: ["RS256"] });
+}
+
+export async function readEdgeTokenFromEnv(token: string, secret: Uint8Array) {
+  // ok: ethos.js.hardcoded-jwt-secret
+  await jwtVerify(token, new TextEncoder().encode(process.env.JWT_SECRET), { algorithms: ["HS256"] });
+  // ok: ethos.js.hardcoded-jwt-secret
+  return jwtVerify(token, secret, { algorithms: ["HS256"] });
+}
+
+export function issueWithConfiguredSecret(userId: string, jwtSecret: string) {
+  // ok: ethos.js.hardcoded-jwt-secret
+  return jwt.sign({ sub: userId }, jwtSecret);
+}
+
+// ok: ethos.js.hardcoded-jwt-secret
+app.use(expressjwt({ secret: config.get("jwtSecret"), algorithms: ["HS256"] }));
 
 // ---------------------------------------------------------------------------
 // ethos.js.auth-cookie-without-httponly
