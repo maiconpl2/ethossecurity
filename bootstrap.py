@@ -10,9 +10,9 @@ import urllib.request
 import venv
 from pathlib import Path
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 WHEEL = 'ethossecurity-' + VERSION + '-py3-none-any.whl'
-WHEEL_SHA256 = '0ac7450573016c3dde56b6fbed4ac51aa69edd555a68be777aa903dff007892a'
+WHEEL_SHA256 = 'd6381607c5637b4402b5841f5d9d21ae043bdf81d580ae21b0559518567f31e6'
 BASE = 'https://github.com/maiconpl2/ethossecurity/releases/download/v' + VERSION + '/'
 
 
