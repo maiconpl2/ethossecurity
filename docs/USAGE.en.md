@@ -42,12 +42,12 @@ python -m pip install .
 ethos-sec --help
 ```
 
-Alternatively install the supplied `.whl` with `python -m pip install /path/to/ethossecurity-0.2.0-py3-none-any.whl`.
+Alternatively install the supplied `.whl` with `python -m pip install /path/to/ethossecurity-0.3.0-py3-none-any.whl`.
 
 To install the published release from GitHub:
 
 ```sh
-python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.2.0"
+python -m pip install "git+https://github.com/maiconpl2/ethossecurity.git@v0.3.0"
 ```
 
 Prefer a reviewed version or commit. Do not put tokens in the URL. Installing EthosSecurity does not install the scanners.
